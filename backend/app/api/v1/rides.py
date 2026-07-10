@@ -14,7 +14,8 @@ from app.models.ride import (
     RideHistoryItem,
     RideOut,
 )
-from app.services import fare_service, geohash, maps_service, surge_service
+from app.services import capacity_service, fare_service, geohash, maps_service, surge_service
+from app.services.expiry_service import SCHEDULE_BROADCAST_LEAD
 from app.services.fare_service import get_fare_rules
 
 router = APIRouter(prefix="/rides", tags=["rides"])
@@ -104,11 +105,16 @@ async def create_ride(
 ):
     db = get_firestore_client()
 
-    existing_active = [
-        doc
-        for doc in db.collection("rides").where("passengerId", "==", current_user.uid).stream()
-        if doc.to_dict().get("status") in ACTIVE_STATUSES
-    ]
+    # Equality + "in" + limit(1) - no composite index needed, and caps this
+    # at one read instead of streaming the passenger's entire ride history
+    # (which used to grow, and get re-read, forever).
+    existing_active = list(
+        db.collection("rides")
+        .where("passengerId", "==", current_user.uid)
+        .where("status", "in", list(ACTIVE_STATUSES))
+        .limit(1)
+        .stream()
+    )
     if existing_active:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -144,7 +150,8 @@ async def create_ride(
         goods_weight_kg=payload.goods.weight_kg,
         goods_volume_m3=payload.goods.volume_m3,
         surge_multiplier=surge,
-        at=datetime.now(),
+        # No `at=` - fare_service defaults to now() in Asia/Dhaka time, which
+        # is what the peak/night windows are actually defined against.
         rules=rules,
     )
 
@@ -159,6 +166,14 @@ async def create_ride(
         "driverName": None,
         "status": "scheduled" if scheduled_at else "requested",
         "scheduledAt": scheduled_at,
+        # Present only while waiting to be broadcast - the sweeper range-scans
+        # this field and deletes it on promotion, so far-future scheduled
+        # rides are never re-read sweep after sweep (see expiry_service).
+        **(
+            {"scheduleBroadcastAt": scheduled_at - SCHEDULE_BROADCAST_LEAD}
+            if scheduled_at
+            else {}
+        ),
         "pickup": payload.pickup.model_dump(),
         "destination": payload.destination.model_dump(),
         "distanceMeters": route["distance_meters"],
@@ -192,13 +207,21 @@ def get_ride_history(current_user: CurrentUser = Depends(get_current_user)):
 
     db = get_firestore_client()
     field = "passengerId" if current_user.role == "passenger" else "driverId"
-    query = db.collection("rides").where(field, "==", current_user.uid)
+    # Equality + "in" + limit needs no composite index (unlike adding
+    # order_by on a third field would). This used to stream every ride the
+    # user was ever part of, active or not, to find just the terminal ones -
+    # now only terminal-status rides are read, capped well above the 50 we
+    # actually return.
+    query = (
+        db.collection("rides")
+        .where(field, "==", current_user.uid)
+        .where("status", "in", ["completed", "cancelled"])
+        .limit(200)
+    )
 
     items = []
     for doc in query.stream():
         data = doc.to_dict()
-        if data.get("status") not in ("completed", "cancelled"):
-            continue
 
         counterparty_name = (
             data.get("driverName")
@@ -321,10 +344,20 @@ def cancel_ride(
         "cancelReason": payload.reason or "Cancelled",
         "cancellationFee": cancellation_fee,
     }
-    ride_ref.update({**updates, "cancelledAt": firestore.SERVER_TIMESTAMP})
-    db.collection("ride_requests").document(ride_id).set(
-        {"status": "cancelled"}, merge=True
+    ride_ref.update(
+        {
+            **updates,
+            "cancelledAt": firestore.SERVER_TIMESTAMP,
+            # A cancelled scheduled ride must not linger in the sweeper's
+            # scheduleBroadcastAt scan; deleting a field that isn't set is a
+            # no-op, so this is safe for ordinary rides too.
+            "scheduleBroadcastAt": firestore.DELETE_FIELD,
+        }
     )
+    # Delete rather than mark cancelled - a broadcast doc has no purpose once
+    # the ride it points to is dead, and leaving it around just means every
+    # future sweep/surge scan pays to re-read and re-discard it forever.
+    db.collection("ride_requests").document(ride_id).delete()
 
     data.update(updates)
     return _ride_to_out(ride_id, data)
@@ -352,7 +385,7 @@ def accept_ride(
     if not capacity:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Set up your truck details before accepting rides",
+            detail="Set up your vehicle details before accepting rides",
         )
 
     ride_ref = db.collection("rides").document(ride_id)
@@ -375,37 +408,15 @@ def accept_ride(
                 detail="Ride is no longer available",
             )
 
-        # Pooled capacity ledger: the truck's remaining space is its capacity
-        # minus everything already on board or committed to.
-        used_kg = used_m3 = riders = 0
-        for doc in transaction.get(active_rides_query):
-            active = doc.to_dict()
-            if active.get("status") not in ("accepted", "in_progress"):
-                continue
-            goods = active.get("goods") or {}
-            used_kg += goods.get("weight_kg", 0) or 0
-            used_m3 += goods.get("volume_m3", 0) or 0
-            riders += 1
-
+        # Pooled capacity ledger: the vehicle's remaining space is its
+        # capacity minus everything already on board or committed to. Pure
+        # math lives in capacity_service so it's unit-tested without needing
+        # a Firestore transaction to exercise it.
+        active_rides = [doc.to_dict() for doc in transaction.get(active_rides_query)]
         goods = data.get("goods") or {}
-        need_kg = goods.get("weight_kg", 0) or 0
-        need_m3 = goods.get("volume_m3", 0) or 0
-
-        if riders + 1 > capacity.get("maxPassengers", 1):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="No passenger seat left on your truck",
-            )
-        if used_kg + need_kg > capacity.get("maxWeightKg", 0):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Not enough weight capacity left for this load",
-            )
-        if used_m3 + need_m3 > capacity.get("maxVolumeM3", 0):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Not enough cargo space left for this load",
-            )
+        fits, reason = capacity_service.check_capacity(capacity, active_rides, goods)
+        if not fits:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=reason)
 
         updates = {
             "driverId": current_user.uid,
@@ -413,7 +424,9 @@ def accept_ride(
             "status": "accepted",
         }
         transaction.update(ride_ref, {**updates, "acceptedAt": firestore.SERVER_TIMESTAMP})
-        transaction.update(ride_request_ref, {"status": "matched"})
+        # Delete rather than mark matched - see cancel_ride for why broadcast
+        # docs don't stick around once they're no longer live.
+        transaction.delete(ride_request_ref)
 
         data.update(updates)
         return data
@@ -468,71 +481,80 @@ def rate_ride(
     _: CurrentUser = Depends(rate_limit("rides.rate", max_calls=10, window_seconds=60)),
 ):
     db = get_firestore_client()
-    ride_ref, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
-
-    if current_user.uid == data.get("passengerId"):
-        rater_role = "passenger"
-        rated_uid = data.get("driverId")
-        flag_field = "ratedByPassenger"
-    elif current_user.uid == data.get("driverId"):
-        rater_role = "driver"
-        rated_uid = data.get("passengerId")
-        flag_field = "ratedByDriver"
-    else:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this ride")
-
-    if data["status"] != "completed":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Only completed rides can be rated",
-        )
-    if data.get(flag_field):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="You already rated this ride",
-        )
-    if not rated_uid:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nobody to rate")
-
-    db.collection("ratings").document(ride_id).set(
-        {
-            "rideId": ride_id,
-            "passengerId": data.get("passengerId"),
-            "driverId": data.get("driverId"),
-            f"by_{rater_role}": {
-                "rating": payload.rating,
-                "comment": payload.comment,
-                "at": firestore.SERVER_TIMESTAMP,
-            },
-        },
-        merge=True,
-    )
-    ride_ref.update({flag_field: True})
-
-    # Running average on the rated user's profile doc.
-    profile_ref = (
-        db.collection("driver_profiles").document(rated_uid)
-        if rater_role == "passenger"
-        else db.collection("users").document(rated_uid)
-    )
+    ride_ref = db.collection("rides").document(ride_id)
     transaction = db.transaction()
 
+    # Everything - the "already rated" check, the rating doc, the ride flag,
+    # and the running average - lives in one transaction now. It used to
+    # check-then-write outside any transaction, so two concurrent rate calls
+    # for the same ride could both pass the "already rated" check and both
+    # count toward the average.
     @firestore.transactional
-    def _update_avg(transaction):
+    def _rate(transaction):
+        snapshot = ride_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
+        data = snapshot.to_dict()
+
+        if current_user.uid == data.get("passengerId"):
+            rater_role = "passenger"
+            rated_uid = data.get("driverId")
+            flag_field = "ratedByPassenger"
+        elif current_user.uid == data.get("driverId"):
+            rater_role = "driver"
+            rated_uid = data.get("passengerId")
+            flag_field = "ratedByDriver"
+        else:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this ride")
+
+        if data["status"] != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only completed rides can be rated",
+            )
+        if data.get(flag_field):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You already rated this ride",
+            )
+        if not rated_uid:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nobody to rate")
+
+        profile_ref = (
+            db.collection("driver_profiles").document(rated_uid)
+            if rater_role == "passenger"
+            else db.collection("users").document(rated_uid)
+        )
         profile = profile_ref.get(transaction=transaction)
         existing = (profile.to_dict() or {}).get("rating") or {}
         count = existing.get("count", 0)
         avg = existing.get("avg", 0.0)
         new_count = count + 1
         new_avg = round((avg * count + payload.rating) / new_count, 2)
+
+        # All reads are done - writes from here on.
+        transaction.set(
+            db.collection("ratings").document(ride_id),
+            {
+                "rideId": ride_id,
+                "passengerId": data.get("passengerId"),
+                "driverId": data.get("driverId"),
+                f"by_{rater_role}": {
+                    "rating": payload.rating,
+                    "comment": payload.comment,
+                    "at": firestore.SERVER_TIMESTAMP,
+                },
+            },
+            merge=True,
+        )
+        transaction.update(ride_ref, {flag_field: True})
         transaction.set(
             profile_ref,
             {"rating": {"avg": new_avg, "count": new_count}},
             merge=True,
         )
 
-    _update_avg(transaction)
+    _rate(transaction)
     return {"status": "ok"}
 
 

@@ -15,19 +15,34 @@ SCHEDULE_BROADCAST_LEAD = timedelta(minutes=5)
 
 
 def promote_due_scheduled_rides() -> int:
-    """Broadcast scheduled rides whose pickup time is (almost) here."""
+    """Broadcast scheduled rides whose pickup time is (almost) here.
+
+    Queries on scheduleBroadcastAt - a field that exists only while a ride is
+    waiting to be broadcast and is deleted the moment it's promoted (or found
+    stale). Querying status == "scheduled" instead would re-read every not-yet-
+    due scheduled ride on every 30s sweep: a ride booked 7 days ahead would be
+    billed ~20,000 reads before it ever ran. A single-field range on a
+    self-cleaning field only ever matches docs that became due since the last
+    sweep - same pattern expire_stale_requests uses on ride_requests.
+    """
     from app.api.v1.rides import broadcast_ride_request
 
     db = get_firestore_client()
-    due_before = datetime.now(timezone.utc) + SCHEDULE_BROADCAST_LEAD
+    now = datetime.now(timezone.utc)
     promoted = 0
 
-    for doc in db.collection("rides").where("status", "==", "scheduled").stream():
+    for doc in (
+        db.collection("rides").where("scheduleBroadcastAt", "<=", now).stream()
+    ):
         data = doc.to_dict()
-        scheduled_at = data.get("scheduledAt")
-        if not scheduled_at or scheduled_at > due_before:
+        if data.get("status") != "scheduled":
+            # Cancelled (or otherwise moved on) before its broadcast time -
+            # drop the field so this doc never matches the sweep again.
+            doc.reference.update({"scheduleBroadcastAt": firestore.DELETE_FIELD})
             continue
-        doc.reference.update({"status": "requested"})
+        doc.reference.update(
+            {"status": "requested", "scheduleBroadcastAt": firestore.DELETE_FIELD}
+        )
         data["status"] = "requested"
         broadcast_ride_request(db, doc.id, data)
         promoted += 1
@@ -39,6 +54,13 @@ def expire_stale_requests() -> int:
     """Cancel rides whose broadcast request passed its expiresAt with no driver.
 
     Runs in a thread (Firestore admin client is sync); returns how many expired.
+
+    accept_ride/cancel_ride delete their ride_requests doc the instant it stops
+    being live, so - barring a request that is still genuinely pending - this
+    scan only ever finds docs that crossed expiresAt since the last sweep, not
+    the collection's entire history. Deleting (rather than marking "expired")
+    keeps it that way: a doc left behind with an old expiresAt would otherwise
+    match this query forever and get re-read, and re-billed, every 30s.
     """
     db = get_firestore_client()
     now = datetime.now(timezone.utc)
@@ -49,6 +71,7 @@ def expire_stale_requests() -> int:
     ):
         data = doc.to_dict()
         if data.get("status") != "pending":
+            doc.reference.delete()
             continue
 
         ride_ref = db.collection("rides").document(doc.id)
@@ -63,7 +86,7 @@ def expire_stale_requests() -> int:
                     "cancelledAt": firestore.SERVER_TIMESTAMP,
                 }
             )
-        doc.reference.update({"status": "expired"})
+        doc.reference.delete()
         expired += 1
 
     return expired
