@@ -8,7 +8,10 @@ import Spinner from '@/components/ui/Spinner'
 import appConfig from '@/configs/app.config'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-const POLL_INTERVAL_MS = 5000
+// Each poll costs the backend 1-2 Firestore reads (ride + driver location),
+// so this is a balance between map smoothness for the viewer and read quota:
+// 10s is still plenty to follow a trip, at half the cost of the old 5s.
+const POLL_INTERVAL_MS = 10000
 
 const routeLineLayer = {
     id: 'shared-route-line',
