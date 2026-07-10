@@ -24,7 +24,7 @@ const fields = [
     { name: 'minimum_fare', label: 'Minimum fare (BDT)' },
     { name: 'per_kg_rate', label: 'Goods rate per kg (BDT)' },
     { name: 'per_m3_rate', label: 'Goods rate per m³ (BDT)' },
-    { name: 'pool_discount_pct', label: 'Shared-truck discount (%)' },
+    { name: 'pool_discount_pct', label: 'Shared-ride discount (%)' },
     { name: 'peak_hour_multiplier', label: 'Peak hour multiplier' },
     { name: 'night_multiplier', label: 'Night multiplier' },
     { name: 'surge_cap', label: 'Surge cap (max multiplier)' },

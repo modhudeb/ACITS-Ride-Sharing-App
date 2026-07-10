@@ -5,9 +5,9 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import Card from '@/components/ui/Card'
 import DriverDotsLayer from '@/components/shared/DriverDotsLayer'
 import { db } from '@/services/firebase/firebaseApp'
+import { DEFAULT_CENTER } from '@/constants/map.constant'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-const DEFAULT_CENTER = { lat: 23.8103, lng: 90.4125 } // Dhaka
 const STALE_LOCATION_MS = 2 * 60 * 1000
 
 const StatTile = ({ label, value }) => (
@@ -114,7 +114,7 @@ const LiveOps = () => {
                 <Card>
                     <h5 className="mb-2">Live operations</h5>
                     <div className="flex gap-6">
-                        <StatTile label="Online trucks" value={drivers.length} />
+                        <StatTile label="Online drivers" value={drivers.length} />
                         <StatTile
                             label="Active trips"
                             value={activeRides.length}
@@ -125,7 +125,7 @@ const LiveOps = () => {
                         />
                     </div>
                     <div className="text-xs text-gray-400 mt-2 space-y-0.5">
-                        <div>Blue = truck · Red = pickup · Teal = drop-off</div>
+                        <div>Blue = driver · Red = pickup · Teal = drop-off</div>
                     </div>
                 </Card>
             </div>

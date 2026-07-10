@@ -31,9 +31,9 @@ import useActiveDriverRides from '@/utils/hooks/useActiveDriverRides'
 import useDriverProfile from '@/utils/hooks/useDriverProfile'
 import useDriverEta from '@/utils/hooks/useDriverEta'
 import haversineDistanceKm from '@/utils/haversineDistanceKm'
+import { DEFAULT_CENTER } from '@/constants/map.constant'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-const DEFAULT_CENTER = { lat: 23.8103, lng: 90.4125 } // Dhaka
 
 // Adaptive heartbeat: report quickly while actually moving, but a parked
 // truck only pings once a minute - an order of magnitude fewer Firestore
@@ -291,6 +291,7 @@ const DriverHome = () => {
     const pendingRequests = usePendingRideRequests(
         onlineStatus === 'online' ? user.uid : null,
         position,
+        driverProfile?.vehicle?.type,
     )
     const sortedRequests = position
         ? [...pendingRequests].sort(
@@ -606,18 +607,22 @@ const DriverHome = () => {
                     </div>
                     {capacity && (
                         <div className="mt-3 flex flex-col gap-1.5">
-                            <CapacityBar
-                                label="Load"
-                                used={usedKg}
-                                max={capacity.maxWeightKg}
-                                unit="kg"
-                            />
-                            <CapacityBar
-                                label="Space"
-                                used={usedM3}
-                                max={capacity.maxVolumeM3}
-                                unit="m³"
-                            />
+                            {capacity.maxWeightKg > 0 && (
+                                <CapacityBar
+                                    label="Load"
+                                    used={usedKg}
+                                    max={capacity.maxWeightKg}
+                                    unit="kg"
+                                />
+                            )}
+                            {capacity.maxVolumeM3 > 0 && (
+                                <CapacityBar
+                                    label="Space"
+                                    used={usedM3}
+                                    max={capacity.maxVolumeM3}
+                                    unit="m³"
+                                />
+                            )}
                             <div className="text-xs text-gray-500">
                                 {riders} / {capacity.maxPassengers} riders on
                                 board

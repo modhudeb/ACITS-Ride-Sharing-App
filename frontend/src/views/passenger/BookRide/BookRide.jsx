@@ -29,9 +29,9 @@ import useDriverEta from '@/utils/hooks/useDriverEta'
 import haversineDistanceKm from '@/utils/haversineDistanceKm'
 import { usePendingDestinationStore } from '@/store/pendingDestinationStore'
 import { useAuth } from '@/auth'
+import { DEFAULT_CENTER } from '@/constants/map.constant'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-const DEFAULT_CENTER = { lat: 23.8103, lng: 90.4125 } // Dhaka
 
 const routeLineLayer = {
     id: 'route-line',
@@ -503,7 +503,7 @@ const BookRide = () => {
                                     >
                                         Add goods
                                     </button>{' '}
-                                    to reserve truck space for your load.
+                                    to reserve cargo space for your load (matches you with a truck).
                                 </p>
                             )}
                         </div>
@@ -572,7 +572,7 @@ const BookRide = () => {
                             )}
                             {estimate.fare_breakdown?.pool_discount_pct > 0 && (
                                 <div className="flex justify-between text-emerald-600">
-                                    <span>Shared truck discount</span>
+                                    <span>Shared ride discount</span>
                                     <span>
                                         -
                                         {estimate.fare_breakdown.pool_discount_pct}
@@ -621,7 +621,7 @@ const BookRide = () => {
                             )}
                         </div>
                         <p className="text-xs text-gray-400 mb-3">
-                            Shared truck ride - other employees may be picked up
+                            Shared ride - other employees may be picked up
                             along the way.
                         </p>
                         <div className="mb-3">
