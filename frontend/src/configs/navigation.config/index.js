@@ -1,0 +1,77 @@
+import { NAV_ITEM_TYPE_ITEM } from '@/constants/navigation.constant'
+import { ADMIN } from '@/constants/roles.constant'
+
+const navigationConfig = [
+    {
+        key: 'home',
+        path: '/home',
+        title: 'Home',
+        translateKey: 'nav.home',
+        icon: 'home',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [],
+        subMenu: [],
+    },
+    {
+        key: 'admin.dashboard',
+        path: '/admin',
+        title: 'Dashboard',
+        translateKey: 'nav.admin.dashboard',
+        icon: 'dashboard',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+    {
+        key: 'admin.driverApproval',
+        path: '/admin/drivers',
+        title: 'Driver Approvals',
+        translateKey: 'nav.admin.driverApproval',
+        icon: 'driverApproval',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+    {
+        key: 'admin.passengerManagement',
+        path: '/admin/passengers',
+        title: 'Passenger Management',
+        translateKey: 'nav.admin.passengerManagement',
+        icon: 'passengerManagement',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+    {
+        key: 'admin.pricingConfig',
+        path: '/admin/pricing',
+        title: 'Pricing Config',
+        translateKey: 'nav.admin.pricingConfig',
+        icon: 'pricingConfig',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+    {
+        key: 'admin.rideManagement',
+        path: '/admin/rides',
+        title: 'Rides',
+        translateKey: 'nav.admin.rideManagement',
+        icon: 'rideManagement',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+    {
+        key: 'admin.liveOps',
+        path: '/admin/live',
+        title: 'Live Map',
+        translateKey: 'nav.admin.liveOps',
+        icon: 'liveOps',
+        type: NAV_ITEM_TYPE_ITEM,
+        authority: [ADMIN],
+        subMenu: [],
+    },
+]
+
+export default navigationConfig

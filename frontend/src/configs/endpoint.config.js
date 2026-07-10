@@ -1,0 +1,36 @@
+export const apiPrefix = '/api'
+
+const endpointConfig = {
+    signIn: '/sign-in',
+    signOut: '/sign-out',
+    signUp: '/sign-up',
+    forgotPassword: '/forgot-password',
+    resetPassword: '/reset-password',
+    routeEstimate: '/v1/routes/estimate',
+    routeEta: '/v1/routes/eta',
+    adminLogin: '/v1/admin/login',
+    adminDrivers: '/v1/admin/drivers',
+    adminDriver: (uid) => `/v1/admin/drivers/${uid}`,
+    adminPassengers: '/v1/admin/passengers',
+    adminPassenger: (uid) => `/v1/admin/passengers/${uid}`,
+    rides: '/v1/rides',
+    rideHistory: '/v1/rides/history',
+    ride: (rideId) => `/v1/rides/${rideId}`,
+    rideCancel: (rideId) => `/v1/rides/${rideId}/cancel`,
+    rideAccept: (rideId) => `/v1/rides/${rideId}/accept`,
+    rideReject: (rideId) => `/v1/rides/${rideId}/reject`,
+    rideStart: (rideId) => `/v1/rides/${rideId}/start`,
+    rideComplete: (rideId) => `/v1/rides/${rideId}/complete`,
+    rideRate: (rideId) => `/v1/rides/${rideId}/rate`,
+    driverStatus: '/v1/drivers/status',
+    driverVehicle: '/v1/drivers/vehicle',
+    driverLocation: '/v1/drivers/location',
+    driverEarnings: '/v1/drivers/earnings',
+    adminPricing: '/v1/admin/pricing',
+    adminRides: '/v1/admin/rides',
+    driverHeatmap: '/v1/drivers/heatmap',
+    adminDashboardStats: '/v1/admin/dashboard/stats',
+    assistantChat: '/v1/assistant/chat',
+}
+
+export default endpointConfig
