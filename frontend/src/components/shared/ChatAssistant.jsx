@@ -6,8 +6,7 @@ import Input from '@/components/ui/Input'
 import Spinner from '@/components/ui/Spinner'
 import { apiAssistantChat } from '@/services/AssistantService'
 import { usePendingDestinationStore } from '@/store/pendingDestinationStore'
-
-const DEFAULT_CENTER = { lat: 23.8103, lng: 90.4125 } // Dhaka
+import { DEFAULT_CENTER } from '@/constants/map.constant'
 
 const WELCOME = {
     role: 'assistant',

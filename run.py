@@ -56,6 +56,12 @@ def main():
         [
             str(BACKEND_PYTHON), "-m", "uvicorn", "app.main:app",
             "--host", "0.0.0.0", "--port", "8000",
+            # Auto-restarts on code changes, same as Vite's HMR on the
+            # frontend side - no more manually killing/relaunching run.py
+            # after every backend edit. The reload watcher runs as a child
+            # of this process either way, so kill_process_tree() still
+            # tears down the whole tree on Ctrl+C.
+            "--reload", "--reload-dir", "app",
         ],
         cwd=str(BACKEND_DIR),
     )
