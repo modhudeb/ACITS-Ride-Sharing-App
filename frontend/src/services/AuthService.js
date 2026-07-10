@@ -19,6 +19,26 @@ const ROLE_LABEL = {
     [ADMIN]: 'Admin',
 }
 
+// Stamps the caller's Firestore role onto their Firebase Auth custom claims
+// (backend /auth/claims), then force-refreshes the ID token so THIS session
+// picks it up immediately. Once a token carries the claim, the backend's
+// get_current_user reads it straight off the verified token instead of
+// doing a Firestore lookup on every request. Non-fatal: if this fails, the
+// backend's Firestore-read fallback keeps everything working as before.
+async function syncRoleClaim(firebaseUser) {
+    try {
+        const freshToken = await firebaseUser.getIdToken()
+        await ApiService.fetchDataWithAxios({
+            url: endpointConfig.authClaims,
+            method: 'post',
+            headers: { Authorization: `Bearer ${freshToken}` },
+        })
+        await firebaseUser.getIdToken(true)
+    } catch {
+        // Fine - stays on the Firestore-read fallback until this succeeds.
+    }
+}
+
 async function buildSignInResult(firebaseUser) {
     const userRef = doc(db, 'users', firebaseUser.uid)
     const snapshot = await getDoc(userRef)
@@ -56,6 +76,9 @@ export async function apiSignIn({ email, password, role }) {
                 : 'This account has no role assigned yet. Please contact support.',
         )
     }
+
+    await syncRoleClaim(credential.user)
+    result.token = await credential.user.getIdToken()
 
     return result
 }
@@ -95,6 +118,8 @@ export async function apiSignUp({ email, password, userName, role = DEFAULT_ROLE
         status,
         createdAt: serverTimestamp(),
     })
+
+    await syncRoleClaim(credential.user)
 
     return buildSignInResult(credential.user)
 }
