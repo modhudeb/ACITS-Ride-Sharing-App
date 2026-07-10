@@ -1,7 +1,9 @@
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from firebase_admin import auth as firebase_auth
+from firebase_admin import firestore
 
 from app.core.config import get_settings
 from app.core.firebase import get_firebase_app, get_firestore_client
@@ -14,13 +16,32 @@ from app.services import fare_service
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+def _count(query) -> int:
+    """Firestore count() aggregation - billed as a single read no matter how
+    many documents match, instead of streaming (and paying for) every one."""
+    result = query.count().get()
+    return int(result[0][0].value)
+
+
+def _sum(query, field: str) -> float:
+    result = query.sum(field).get()
+    return float(result[0][0].value or 0.0)
+
+
 @router.post("/login", response_model=AdminLoginResponse)
 def admin_login(
     payload: AdminLoginRequest,
     _: None = Depends(rate_limit_by_ip("admin.login", max_calls=10, window_seconds=60)),
 ):
     settings = get_settings()
-    if payload.username != settings.admin_username or payload.password != settings.admin_password:
+    # Constant-time compare for the password half - plain != short-circuits
+    # on the first differing character, which is a (minor, but free to
+    # close) timing side channel. Username isn't a secret, so a normal
+    # comparison there is fine.
+    valid = payload.username == settings.admin_username and secrets.compare_digest(
+        payload.password, settings.admin_password
+    )
+    if not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin username or password",
@@ -40,7 +61,12 @@ def admin_login(
         merge=True,
     )
 
-    custom_token = firebase_auth.create_custom_token(user.uid)
+    # Persist the claim (covers tokens minted later by a silent refresh) and
+    # also embed it directly in this custom token's payload, so the very
+    # first ID token exchanged from it already carries "role" - no separate
+    # /auth/claims round trip needed for the admin gate.
+    firebase_auth.set_custom_user_claims(user.uid, {"role": "admin"})
+    custom_token = firebase_auth.create_custom_token(user.uid, {"role": "admin"})
     return AdminLoginResponse(custom_token=custom_token.decode("utf-8"))
 
 
@@ -53,6 +79,7 @@ def list_drivers(
     query = db.collection("users").where("role", "==", "driver")
     if driver_status:
         query = query.where("status", "==", driver_status)
+    query = query.limit(500)
 
     return [
         DriverOut(
@@ -94,7 +121,10 @@ def list_passengers(admin: CurrentUser = Depends(require_role("admin"))):
             role="passenger",
             status=doc.to_dict().get("status", "active"),
         )
-        for doc in db.collection("users").where("role", "==", "passenger").stream()
+        for doc in db.collection("users")
+        .where("role", "==", "passenger")
+        .limit(500)
+        .stream()
     ]
 
 
@@ -123,9 +153,19 @@ def list_rides(
     admin: CurrentUser = Depends(require_role("admin")),
 ):
     db = get_firestore_client()
-    query = db.collection("rides")
+    capped_limit = max(1, min(limit, 500))
+
+    # `limit` used to be accepted but never applied to the query - this
+    # streamed (and paid for) the entire rides collection on every call
+    # regardless of what the caller asked for. Ordering by requestedAt here
+    # needs a composite index (rides: status ASC, requestedAt DESC) - see
+    # firestore.indexes.json.
+    query = db.collection("rides").order_by(
+        "requestedAt", direction=firestore.Query.DESCENDING
+    )
     if ride_status:
         query = query.where("status", "==", ride_status)
+    query = query.limit(capped_limit)
 
     rides = []
     for doc in query.stream():
@@ -149,8 +189,7 @@ def list_rides(
             }
         )
 
-    rides.sort(key=lambda r: r["requested_at"] or "", reverse=True)
-    return rides[: max(1, min(limit, 500))]
+    return rides
 
 
 @router.get("/pricing", response_model=FareRules)
@@ -199,46 +238,37 @@ def update_pricing(
         },
         merge=True,
     )
+    # New rates should apply to the very next estimate, not a minute from now.
+    fare_service.invalidate_fare_rules_cache()
     return payload
 
 
 @router.get("/dashboard/stats", response_model=DashboardStats)
 def get_dashboard_stats(admin: CurrentUser = Depends(require_role("admin"))):
+    # Every figure here used to come from streaming (and paying to read)
+    # entire collections on every dashboard load. count()/sum() aggregations
+    # are billed as a single read each regardless of how many docs match.
     db = get_firestore_client()
-
-    total_passengers = 0
-    total_drivers = 0
-    pending_drivers = 0
-    for doc in db.collection("users").stream():
-        data = doc.to_dict()
-        if data.get("role") == "passenger":
-            total_passengers += 1
-        elif data.get("role") == "driver":
-            total_drivers += 1
-            if data.get("status") == "pending_approval":
-                pending_drivers += 1
-
-    online_drivers = 0
-    for doc in db.collection("driver_profiles").stream():
-        if doc.to_dict().get("onlineStatus") in ("online", "on_trip"):
-            online_drivers += 1
+    users_ref = db.collection("users")
+    rides_ref = db.collection("rides")
 
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    total_rides = 0
-    completed_rides = 0
-    rides_today = 0
-    total_revenue = 0.0
-    for doc in db.collection("rides").stream():
-        data = doc.to_dict()
-        total_rides += 1
-        if data.get("status") == "completed":
-            completed_rides += 1
-            total_revenue += data.get("finalFare") or data.get("fareEstimate") or 0
-        requested_at = data.get("requestedAt")
-        if requested_at and requested_at >= today_start:
-            rides_today += 1
+    total_passengers = _count(users_ref.where("role", "==", "passenger"))
+    total_drivers = _count(users_ref.where("role", "==", "driver"))
+    pending_drivers = _count(
+        users_ref.where("role", "==", "driver").where("status", "==", "pending_approval")
+    )
+    online_drivers = _count(
+        db.collection("driver_profiles").where("onlineStatus", "in", ["online", "on_trip"])
+    )
+    total_rides = _count(rides_ref)
+    completed_rides = _count(rides_ref.where("status", "==", "completed"))
+    rides_today = _count(rides_ref.where("requestedAt", ">=", today_start))
+    # complete_ride always writes finalFare when a ride completes, so this is
+    # accurate for anything completed through the current code path.
+    total_revenue = _sum(rides_ref.where("status", "==", "completed"), "finalFare")
 
     return DashboardStats(
         total_passengers=total_passengers,
