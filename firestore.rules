@@ -1,0 +1,98 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function role() {
+      return isSignedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function isAdmin() {
+      return role() == 'admin';
+    }
+
+    match /users/{uid} {
+      // Self-serve signup writes this doc directly from the client SDK, so
+      // 'role' must be pinned to non-privileged values here - otherwise
+      // devtools could set role:'admin' on yourself.
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid)
+        && request.resource.data.role in ['passenger', 'driver'];
+      // Everything else (approving drivers, suspending accounts, writing the
+      // rating average) happens server-side via the Admin SDK, which is not
+      // subject to these rules. Direct client updates may only touch profile
+      // fields - never role/status/rating.
+      allow update: if isAdmin() || (
+        isOwner(uid) &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['role', 'status', 'rating'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /driver_profiles/{uid} {
+      // All legitimate writes (status, location, truck capacity, rating)
+      // go through backend endpoints using the Admin SDK, which bypasses
+      // these rules - so the client is never granted direct write access,
+      // closing off devtools-forged onlineStatus/capacity/rating.
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /rides/{rideId} {
+      allow read: if isSignedIn() && (
+        resource.data.passengerId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid ||
+        isAdmin()
+      );
+      // Ride creation/status transitions/fare are only ever written by the
+      // backend (Admin SDK), which validates state transitions and capacity.
+      // The client has no legitimate direct write path here.
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+
+      function isRideParticipant() {
+        return isSignedIn() && (
+          get(/databases/$(database)/documents/rides/$(rideId)).data.passengerId == request.auth.uid ||
+          get(/databases/$(database)/documents/rides/$(rideId)).data.driverId == request.auth.uid
+        );
+      }
+
+      match /messages/{messageId} {
+        allow read: if isRideParticipant() || isAdmin();
+        allow create: if isRideParticipant()
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 500;
+        allow update, delete: if false;
+      }
+    }
+
+    match /ride_requests/{rideId} {
+      allow read: if role() == 'driver' || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /fare_rules/{document} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /ratings/{rideId} {
+      // Written only by the backend's /rides/{id}/rate endpoint (Admin SDK),
+      // which enforces one rating per participant per completed ride.
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}
