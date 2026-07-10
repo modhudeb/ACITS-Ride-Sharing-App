@@ -1,6 +1,12 @@
+import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.core.firebase import get_firestore_client
+
+# Peak/night windows are defined in local Dhaka time - the server itself may
+# run on UTC (most hosts do), so "now" must be converted, not taken as-is.
+FARE_TIMEZONE = ZoneInfo("Asia/Dhaka")
 
 # Pricing model follows the Uber/Pathao structure:
 #   metered = (base + km*perKm + min*perMin) * peak * night * surge
@@ -29,11 +35,36 @@ DEFAULT_FARE_RULES = {
 }
 
 
+# Every estimate, booking, and surge computation needs the fare rules, but
+# they only actually change when an admin saves the pricing page - reading the
+# config doc from Firestore on each call paid one read per estimate for a
+# value that's identical 99.9% of the time. A short TTL keeps multi-worker
+# deployments (which can't see this process's invalidation) at most a minute
+# stale, and update_pricing invalidates immediately for the local process.
+_RULES_CACHE_TTL_SECONDS = 60
+_rules_cache: dict | None = None
+_rules_cached_at: float = 0.0
+
+
 def get_fare_rules() -> dict:
+    global _rules_cache, _rules_cached_at
+    if (
+        _rules_cache is not None
+        and time.monotonic() - _rules_cached_at < _RULES_CACHE_TTL_SECONDS
+    ):
+        return dict(_rules_cache)
+
     doc = get_firestore_client().collection("fare_rules").document("config").get()
-    if doc.exists:
-        return {**DEFAULT_FARE_RULES, **doc.to_dict()}
-    return dict(DEFAULT_FARE_RULES)
+    rules = {**DEFAULT_FARE_RULES, **doc.to_dict()} if doc.exists else dict(DEFAULT_FARE_RULES)
+    _rules_cache = rules
+    _rules_cached_at = time.monotonic()
+    # Copies keep a caller that mutates its result from poisoning the cache.
+    return dict(rules)
+
+
+def invalidate_fare_rules_cache() -> None:
+    global _rules_cache
+    _rules_cache = None
 
 
 def _is_in_peak_window(hour: int, rules: dict) -> bool:
@@ -57,7 +88,7 @@ def calculate_fare(
     rules: dict | None = None,
 ) -> dict:
     rules = rules or get_fare_rules()
-    at = at or datetime.now()
+    at = at or datetime.now(FARE_TIMEZONE)
 
     distance_km = distance_meters / 1000
     duration_min = duration_seconds / 60

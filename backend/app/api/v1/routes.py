@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends
 
 from app.core.rate_limit import rate_limit
@@ -32,7 +30,8 @@ async def estimate_route(
         goods_weight_kg=payload.goods.weight_kg,
         goods_volume_m3=payload.goods.volume_m3,
         surge_multiplier=surge,
-        at=datetime.now(),
+        # No `at=` - fare_service defaults to now() in Asia/Dhaka time, which
+        # is what the peak/night windows are actually defined against.
         rules=rules,
     )
 
