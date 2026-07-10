@@ -1,8 +1,12 @@
+import logging
+
 import httpx
 from fastapi import HTTPException, status
 
 from app.core.config import get_settings
 from app.models.ride import LatLng
+
+logger = logging.getLogger(__name__)
 
 DIRECTIONS_API_URL = "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/{coords}"
 
@@ -31,9 +35,18 @@ async def compute_route(origin: LatLng, destination: LatLng) -> dict:
         response = await client.get(url, params=params)
 
     if response.status_code != 200:
+        # Don't pass the provider's raw response back to the client - it can
+        # include request internals (query params, occasionally account/plan
+        # details) that are none of the caller's business. Full detail still
+        # goes to the server log for debugging.
+        logger.warning(
+            "Mapbox directions request failed (%s): %s",
+            response.status_code,
+            response.text[:500],
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Route lookup failed: {response.text}",
+            detail="Route lookup failed - please try again",
         )
 
     data = response.json()

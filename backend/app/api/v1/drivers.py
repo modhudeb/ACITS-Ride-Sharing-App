@@ -100,19 +100,24 @@ def update_driver_location(
 
 
 @router.get("/heatmap")
-def get_demand_heatmap(current_user: CurrentUser = Depends(require_role("driver"))):
+def get_demand_heatmap(
+    current_user: CurrentUser = Depends(require_role("driver")),
+    _: CurrentUser = Depends(rate_limit("drivers.heatmap", max_calls=10, window_seconds=60)),
+):
     """Pickup points from the last 30 days - drivers use this to position
     themselves where requests usually appear."""
     db = get_firestore_client()
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
 
+    # Date-bounded at the query level (single-field range, no composite
+    # index needed) instead of streaming - and paying to read - the entire
+    # rides collection, most of which is older than the 30-day window this
+    # endpoint actually cares about. The rate limit above stops a driver
+    # toggling the heatmap repeatedly from re-paying for that scan each time.
     points = []
-    for doc in db.collection("rides").stream():
+    for doc in db.collection("rides").where("requestedAt", ">=", cutoff).stream():
         data = doc.to_dict()
-        requested_at = data.get("requestedAt")
         pickup = data.get("pickup") or {}
-        if not requested_at or requested_at < cutoff:
-            continue
         if pickup.get("lat") is None:
             continue
         points.append({"lat": pickup["lat"], "lng": pickup["lng"]})
