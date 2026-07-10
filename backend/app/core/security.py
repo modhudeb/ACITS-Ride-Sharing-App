@@ -36,8 +36,16 @@ def get_current_user(
         ) from exc
 
     uid = decoded_token["uid"]
-    user_doc = get_firestore_client().collection("users").document(uid).get()
-    role = user_doc.to_dict().get("role") if user_doc.exists else None
+
+    # Role rides along as a custom claim on the verified token (see
+    # /auth/claims and the admin custom-token login) once a session has been
+    # through that flow - no Firestore read needed on the hot path. Tokens
+    # minted before that (older sessions, or the brief window right after
+    # signup before the claim's been synced) fall back to the old lookup.
+    role = decoded_token.get("role")
+    if role is None:
+        user_doc = get_firestore_client().collection("users").document(uid).get()
+        role = user_doc.to_dict().get("role") if user_doc.exists else None
 
     return CurrentUser(uid=uid, email=decoded_token.get("email"), role=role)
 
