@@ -120,7 +120,6 @@ const BookRide = () => {
     // never gets stuck on a live-but-cancelled ride.
     const [rideOverride, setRideOverride] = useState(null)
     const ride = rideOverride || rideFromSocket
-    const rideActive = ride && ride.status !== 'cancelled'
     const trackingDriver =
         ride?.status === 'accepted' || ride?.status === 'in_progress'
     const driverLocation = useDriverLocation(
@@ -481,7 +480,7 @@ const BookRide = () => {
 
                 {!panelMinimized && (
                     <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
-                        {!rideActive && (
+                        {!ride && (
                             <Card>
                                 <div className="mb-3">
                                     <label className="text-xs font-semibold text-gray-500">
