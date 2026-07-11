@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Map, { Marker, Source, Layer } from 'react-map-gl/mapbox'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import Alert from '@/components/ui/Alert'
@@ -25,6 +25,7 @@ import {
     apiCancelRide,
     apiStartRide,
     apiCompleteRide,
+    apiGetEta,
 } from '@/services/RideService'
 import usePendingRideRequests from '@/utils/hooks/usePendingRideRequests'
 import useActiveDriverRides from '@/utils/hooks/useActiveDriverRides'
@@ -56,6 +57,39 @@ const heatmapLayer = {
         'heatmap-opacity': 0.6,
     },
 }
+
+// Solid line for a committed (accepted) ride's traffic-optimized route to
+// the current target (pickup, then destination once picked up).
+const activeRouteLayer = {
+    id: 'active-route-line',
+    type: 'line',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#0d9488', 'line-width': 4 },
+}
+
+// Dashed amber line - matches the pending-request marker color - for a
+// route the driver is previewing before deciding whether to accept.
+const previewRouteLayer = {
+    id: 'preview-route-line',
+    type: 'line',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+        'line-color': '#f59e0b',
+        'line-width': 4,
+        'line-dasharray': [2, 1.5],
+    },
+}
+
+const toRouteGeoJson = (routePath) =>
+    routePath?.length
+        ? {
+              type: 'Feature',
+              geometry: {
+                  type: 'LineString',
+                  coordinates: routePath.map((p) => [p.lng, p.lat]),
+              },
+          }
+        : null
 
 const goodsLabel = (goods) => {
     const kg = goods?.weight_kg || 0
@@ -177,10 +211,18 @@ const ActiveRideCard = ({
     onStartTrip,
     onCompleteTrip,
     onCancelTrip,
+    onEtaChange,
 }) => {
     const target = ride.status === 'accepted' ? ride.pickup : ride.destination
     const targetLabel = ride.status === 'accepted' ? 'pickup' : 'destination'
     const driverEta = useDriverEta(position, target)
+
+    // Lifted to the parent so the map (which lives outside this card) can
+    // draw the same traffic-optimized line this card is already fetching -
+    // avoids a second, duplicate polling loop for the same route.
+    useEffect(() => {
+        onEtaChange?.(ride.id, driverEta)
+    }, [ride.id, driverEta, onEtaChange])
 
     return (
         <Card>
@@ -290,6 +332,29 @@ const DriverHome = () => {
 
     const activeRides = useActiveDriverRides(user.uid)
 
+    // Traffic-optimized route + ETA per active ride, reported up by each
+    // ActiveRideCard (see onEtaChange) so the map can draw the line - kept
+    // pruned to only currently-active ride ids.
+    const [driverEtas, setDriverEtas] = useState({})
+    const handleEtaChange = useCallback((rideId, eta) => {
+        setDriverEtas((prev) => (prev[rideId] === eta ? prev : { ...prev, [rideId]: eta }))
+    }, [])
+    useEffect(() => {
+        const activeIds = new Set(activeRides.map((r) => r.id))
+        setDriverEtas((prev) => {
+            const next = Object.fromEntries(
+                Object.entries(prev).filter(([id]) => activeIds.has(id)),
+            )
+            return Object.keys(next).length === Object.keys(prev).length ? prev : next
+        })
+    }, [activeRides])
+
+    // One-off route preview for a pending request the driver taps before
+    // deciding to accept - not polled, since nothing is committed yet.
+    const [previewRideId, setPreviewRideId] = useState(null)
+    const [previewRoute, setPreviewRoute] = useState(null)
+    const [previewLoading, setPreviewLoading] = useState(false)
+
     // Live capacity ledger: what's already committed on the truck.
     const usedKg = activeRides.reduce(
         (sum, r) => sum + (r.goods?.weight_kg || 0),
@@ -324,6 +389,42 @@ const DriverHome = () => {
                   haversineDistanceKm(position, b.pickup),
           )
         : pendingRequests
+
+    // Clear a stale preview if the request it was for got accepted by
+    // another driver, expired, or the driver went offline.
+    useEffect(() => {
+        if (!previewRideId) return
+        if (!sortedRequests.some((r) => r.rideId === previewRideId)) {
+            setPreviewRideId(null)
+            setPreviewRoute(null)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sortedRequests])
+
+    const handlePreviewRoute = async (request) => {
+        if (previewRideId === request.rideId) {
+            // Tapping the same request again toggles the preview off.
+            setPreviewRideId(null)
+            setPreviewRoute(null)
+            return
+        }
+        if (!position) {
+            notify('Waiting for your location - try again in a moment', 'danger')
+            return
+        }
+        setPreviewRideId(request.rideId)
+        setPreviewRoute(null)
+        setPreviewLoading(true)
+        try {
+            const data = await apiGetEta({ origin: position, destination: request.pickup })
+            setPreviewRoute(data.route_path || [])
+        } catch {
+            notify('Could not load route preview', 'danger')
+            setPreviewRideId(null)
+        } finally {
+            setPreviewLoading(false)
+        }
+    }
 
     // Demand heatmap: fetched once when toggled on, shows where pickups
     // happened over the last 30 days so drivers can position themselves.
@@ -488,11 +589,19 @@ const DriverHome = () => {
         }
     }
 
+    const clearPreviewIfMatching = (rideId) => {
+        if (previewRideId === rideId) {
+            setPreviewRideId(null)
+            setPreviewRoute(null)
+        }
+    }
+
     const handleAccept = async (rideId) => {
         setRespondingId(rideId)
         try {
             await apiAcceptRide(rideId)
             notify('Ride accepted', 'success')
+            clearPreviewIfMatching(rideId)
         } catch (err) {
             notify(
                 err?.response?.data?.detail || 'Could not accept ride',
@@ -507,6 +616,7 @@ const DriverHome = () => {
         setRespondingId(rideId)
         try {
             await apiRejectRide(rideId)
+            clearPreviewIfMatching(rideId)
         } catch {
             notify('Could not reject ride', 'danger')
         } finally {
@@ -559,6 +669,8 @@ const DriverHome = () => {
               ? `${riders} active trip${riders > 1 ? 's' : ''} - still accepting`
               : 'Online - waiting for requests'
 
+    const previewGeoJson = useMemo(() => toRouteGeoJson(previewRoute), [previewRoute])
+
     return (
         <div className="relative h-full w-full">
             <OfflineBanner />
@@ -577,6 +689,22 @@ const DriverHome = () => {
                         data={heatmapGeoJson}
                     >
                         <Layer {...heatmapLayer} />
+                    </Source>
+                )}
+
+                {activeRides.map((ride) => {
+                    const geoJson = toRouteGeoJson(driverEtas[ride.id]?.routePath)
+                    if (!geoJson) return null
+                    return (
+                        <Source key={`route-${ride.id}`} id={`route-${ride.id}`} type="geojson" data={geoJson}>
+                            <Layer {...activeRouteLayer} id={`active-route-line-${ride.id}`} />
+                        </Source>
+                    )
+                })}
+
+                {previewGeoJson && (
+                    <Source id="preview-route" type="geojson" data={previewGeoJson}>
+                        <Layer {...previewRouteLayer} />
                     </Source>
                 )}
 
@@ -697,6 +825,7 @@ const DriverHome = () => {
                         onStartTrip={handleStartTrip}
                         onCompleteTrip={handleCompleteTrip}
                         onCancelTrip={handleCancelTrip}
+                        onEtaChange={handleEtaChange}
                     />
                 ))}
 
@@ -747,7 +876,7 @@ const DriverHome = () => {
                                                     : 'No rider seats left'}
                                             </div>
                                         )}
-                                        <div className="flex gap-2">
+                                        <div className="flex flex-wrap gap-2">
                                             <Button
                                                 size="sm"
                                                 variant="solid"
@@ -774,6 +903,21 @@ const DriverHome = () => {
                                                 }
                                             >
                                                 Reject
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="plain"
+                                                loading={
+                                                    previewRideId === request.rideId &&
+                                                    previewLoading
+                                                }
+                                                onClick={() =>
+                                                    handlePreviewRoute(request)
+                                                }
+                                            >
+                                                {previewRideId === request.rideId
+                                                    ? 'Hide route'
+                                                    : 'Preview'}
                                             </Button>
                                         </div>
                                     </Card>

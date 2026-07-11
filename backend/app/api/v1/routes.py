@@ -57,4 +57,5 @@ async def get_eta(
     return EtaResponse(
         distance_meters=route["distance_meters"],
         duration_seconds=route["duration_seconds"],
+        route_path=route["route_path"],
     )

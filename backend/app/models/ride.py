@@ -66,6 +66,10 @@ class EtaRequest(BaseModel):
 class EtaResponse(BaseModel):
     distance_meters: int
     duration_seconds: int
+    # Already computed by maps_service.compute_route() for the distance/
+    # duration above - returning it too costs nothing extra and lets the
+    # driver's map draw the same traffic-optimized line it's already fetching.
+    route_path: list[LatLng] = Field(default_factory=list)
 
 
 class Address(BaseModel):

@@ -41,6 +41,7 @@ const useDriverEta = (driverLocation, target) => {
                 setEta({
                     distanceKm: data.distance_meters / 1000,
                     minutes: Math.max(1, Math.round(data.duration_seconds / 60)),
+                    routePath: data.route_path || [],
                 })
             })
             .catch(() => {
