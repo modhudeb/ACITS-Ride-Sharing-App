@@ -74,7 +74,7 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 - **Pricing control panel** — edit base fare, per-km / per-minute rates, peak-hour and night multipliers, and surge settings live, with no redeploy.
 
 ### ⚙️ Platform-Level
-- **Surge pricing engine** — fares respond to the live demand/supply ratio in each zone.
+- **Multi-factor surge pricing engine** — the multiplier blends four independent, individually-capped signals per ~5km zone: live demand/supply pressure, demand momentum (last 15 min vs the 15 min before), deviation from the zone's own 4-week historical baseline, and live rainfall (Open-Meteo). Every component fails soft, and the admin-set cap always wins.
 - **JWT authentication** with role-based access control, password reset over email, and rate limiting on sensitive endpoints.
 - **Single WebSocket channel** carrying every realtime topic (ride status, driver location, chat, admin live ops) with per-topic authorization.
 - **Fully containerized** — one `docker compose up -d` starts the entire production stack.
@@ -240,7 +240,7 @@ The project was built in deliberate phases, each one shipped and verified before
 ### Phase 5 — Pooled Cargo & Pricing Engine
 - Goods rides: weight/volume input, truck capacity ledger, pooled matching.
 - Fare rules stored in the database and editable live from the admin panel.
-- Surge pricing from the live demand/supply ratio; peak-hour and night multipliers computed in Asia/Dhaka time.
+- Multi-factor surge: live demand/supply pressure, demand momentum, 4-week zone baseline, and live rainfall — each capped and fail-soft; peak-hour and night multipliers computed in Asia/Dhaka time.
 
 ### Phase 6 — Admin Panel
 - Dashboard statistics, driver approval workflow, passenger management, ride management with filters, pricing configuration UI.
@@ -475,6 +475,7 @@ The suite covers the parts where a bug costs money or trust:
 | Test file | What it protects |
 |---|---|
 | `test_fare_service.py` | Fare math, peak/night windows, surge multipliers |
+| `test_surge_service.py` | Surge blend: component weights, caps, rain saturation, zone geometry |
 | `test_capacity_service.py` | Pooled truck capacity — overbooking is impossible |
 | `test_ride_lifecycle.py` | Every legal (and illegal) ride status transition |
 | `test_auth.py` | Signup/signin, token handling, role enforcement |

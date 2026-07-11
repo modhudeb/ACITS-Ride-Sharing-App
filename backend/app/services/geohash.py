@@ -1,6 +1,26 @@
 _BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
 
 
+def bounds(cell: str) -> tuple[float, float, float, float]:
+    """Decode a geohash cell to its (lat_min, lat_max, lng_min, lng_max) box.
+    Lets tables that store raw lat/lng (e.g. rides.pickup_lat/lng) be queried
+    by zone with two range predicates instead of needing a geohash column."""
+    lat_range = [-90.0, 90.0]
+    lng_range = [-180.0, 180.0]
+    even = True
+    for ch in cell:
+        idx = _BASE32.index(ch)
+        for bit in (16, 8, 4, 2, 1):
+            r = lng_range if even else lat_range
+            mid = (r[0] + r[1]) / 2
+            if idx & bit:
+                r[0] = mid
+            else:
+                r[1] = mid
+            even = not even
+    return lat_range[0], lat_range[1], lng_range[0], lng_range[1]
+
+
 def encode(lat: float, lng: float, precision: int = 9) -> str:
     lat_range = [-90.0, 90.0]
     lng_range = [-180.0, 180.0]
