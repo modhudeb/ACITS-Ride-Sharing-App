@@ -11,6 +11,7 @@ from app.core.realtime import manager
 from app.core.security import CurrentUser, get_current_user, require_role
 from app.db.models import DriverProfile, Rating, Ride, RideMessage, RideRequest, User
 from app.db.session import get_db
+from app.api.v1.drivers import _profile_payload
 from app.models.ride import (
     Address,
     CancelRideRequest,
@@ -616,6 +617,18 @@ def rate_ride(
 
     db.commit()
     _push_ride(ride)
+    # Let the rated driver's own profile view pick up the new average
+    # live, instead of only on their next refetch (useDriverProfile
+    # re-reads the row on this topic's `state` push).
+    if rater_role == "passenger" and profile:
+        manager.broadcast(
+            f"driver_profile:{rated_uid}",
+            {
+                "topic": f"driver_profile:{rated_uid}",
+                "type": "state",
+                "data": _profile_payload(profile),
+            },
+        )
     return {"status": "ok"}
 
 

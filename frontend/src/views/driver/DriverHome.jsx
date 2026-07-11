@@ -624,6 +624,13 @@ const DriverHome = () => {
                         <div>
                             <h4>Welcome, {user.userName || 'driver'}</h4>
                             <p className="text-sm text-gray-500">{statusText}</p>
+                        {driverProfile?.rating?.count > 0 && (
+                            <p className="text-sm text-amber-500 mt-0.5">
+                                ★ {driverProfile.rating.avg} ·{' '}
+                                {driverProfile.rating.count} rating
+                                {driverProfile.rating.count > 1 ? 's' : ''}
+                            </p>
+                        )}
                         </div>
                         <Button
                             variant={onlineStatus === 'offline' ? 'solid' : 'plain'}

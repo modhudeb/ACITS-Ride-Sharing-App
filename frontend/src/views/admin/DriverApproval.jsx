@@ -82,6 +82,7 @@ const DriverApproval = () => {
                             <Th>Name</Th>
                             <Th>Email</Th>
                             <Th>Status</Th>
+                            <Th>Rating</Th>
                             <Th>Actions</Th>
                         </Tr>
                     </THead>
@@ -94,6 +95,18 @@ const DriverApproval = () => {
                                     <Tag className={statusColor[driver.status]}>
                                         {driver.status}
                                     </Tag>
+                                </Td>
+                                <Td>
+                                    {driver.rating_count > 0 ? (
+                                        <span className="text-amber-500">
+                                            ★ {driver.rating_avg}{' '}
+                                            <span className="text-gray-400">
+                                                ({driver.rating_count})
+                                            </span>
+                                        </span>
+                                    ) : (
+                                        <span className="text-gray-400">—</span>
+                                    )}
                                 </Td>
                                 <Td>
                                     <div className="flex gap-2">
@@ -125,7 +138,7 @@ const DriverApproval = () => {
                         ))}
                         {!loading && drivers.length === 0 && (
                             <Tr>
-                                <Td colSpan={4} className="text-center">
+                                <Td colSpan={5} className="text-center">
                                     No drivers have signed up yet
                                 </Td>
                             </Tr>

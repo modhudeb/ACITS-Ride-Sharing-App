@@ -72,11 +72,26 @@ def list_drivers(
     admin: CurrentUser = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    query = db.query(User).filter(User.role == "driver")
+    query = (
+        db.query(User)
+        .filter(User.role == "driver")
+        .outerjoin(DriverProfile, DriverProfile.uid == User.uid)
+        .add_columns(DriverProfile.rating_avg, DriverProfile.rating_count)
+    )
     if driver_status:
         query = query.filter(User.status == driver_status)
-    users = query.limit(500).all()
-    return [DriverOut(uid=u.uid, name=u.name, email=u.email, status=u.status) for u in users]
+    rows = query.limit(500).all()
+    return [
+        DriverOut(
+            uid=u.uid,
+            name=u.name,
+            email=u.email,
+            status=u.status,
+            rating_avg=ra or 0.0,
+            rating_count=rc or 0,
+        )
+        for u, ra, rc in rows
+    ]
 
 
 @router.patch("/drivers/{uid}", response_model=DriverOut)
