@@ -119,8 +119,8 @@ const ChatAssistant = () => {
             <button
                 type="button"
                 aria-label="Open ride assistant"
-                onClick={() => setOpen(true)}
                 className="fixed fab-safe z-20 flex h-14 w-14 items-center justify-center rounded-full transition-transform hover:scale-105"
+                onClick={() => setOpen(true)}
             >
                 {/* Soft pulsing glow behind the button - the plain white/faint-ring
                     version was easy to miss against a busy map background. */}
@@ -166,8 +166,8 @@ const ChatAssistant = () => {
                 className={`fixed fab-safe z-20 flex ${widthClass} ${heightClass} flex-col overflow-hidden rounded-xl border border-emerald-600/30 bg-white shadow-2xl dark:bg-gray-800`}
             >
                 <div
-                    onPointerDown={(e) => dragControls.start(e)}
                     className="flex cursor-grab items-center justify-between bg-emerald-600 px-3 py-2.5 text-white active:cursor-grabbing"
+                    onPointerDown={(e) => dragControls.start(e)}
                 >
                     <span className="flex items-center gap-1.5 text-sm font-semibold">
                         <TbSparkles size={18} /> Ride assistant
@@ -180,9 +180,9 @@ const ChatAssistant = () => {
                                     ? 'Restore ride assistant'
                                     : 'Minimize ride assistant'
                             }
+                            className="rounded p-0.5 hover:bg-emerald-700"
                             onClick={() => setMinimized((m) => !m)}
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="rounded p-0.5 hover:bg-emerald-700"
                         >
                             <TbMinus size={16} />
                         </button>
@@ -193,9 +193,9 @@ const ChatAssistant = () => {
                                     ? 'Shrink ride assistant'
                                     : 'Expand ride assistant'
                             }
+                            className="rounded p-0.5 hover:bg-emerald-700"
                             onClick={() => setExpanded((e) => !e)}
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="rounded p-0.5 hover:bg-emerald-700"
                         >
                             {expanded ? (
                                 <TbMinimize size={16} />
@@ -206,9 +206,9 @@ const ChatAssistant = () => {
                         <button
                             type="button"
                             aria-label="Close ride assistant"
+                            className="rounded p-0.5 hover:bg-emerald-700"
                             onClick={handleClose}
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="rounded p-0.5 hover:bg-emerald-700"
                         >
                             <TbX size={18} />
                         </button>
