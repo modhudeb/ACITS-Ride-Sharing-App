@@ -1,12 +1,15 @@
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from firebase_admin import auth as firebase_auth
 
-from app.core.firebase import get_firebase_app, get_firestore_client
+from app.core.config import get_settings
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+JWT_ALGORITHM = "HS256"
 
 
 @dataclass
@@ -14,6 +17,40 @@ class CurrentUser:
     uid: str
     email: str | None
     role: str | None
+
+
+def create_access_token(uid: str, role: str | None, email: str | None) -> str:
+    """Role/email are baked in at mint time rather than looked up per
+    request - both are immutable for the lifetime of an account in this app
+    (no in-app "change role" or "change email" action exists), so there's no
+    staleness risk, and every request is authenticated from the token alone
+    with zero database round trip."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": uid,
+        "role": role,
+        "email": email,
+        "iat": now,
+        "exp": now + timedelta(days=settings.jwt_access_token_ttl_days),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=JWT_ALGORITHM)
+
+
+def resolve_current_user(token: str) -> CurrentUser:
+    """Verifies a self-issued JWT. Shared by the HTTP dependency below and
+    the WebSocket endpoint, which authenticates via a query param instead of
+    an Authorization header and so can't use HTTPBearer/Depends directly."""
+    settings = get_settings()
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        ) from exc
+
+    return CurrentUser(uid=payload["sub"], email=payload.get("email"), role=payload.get("role"))
 
 
 def get_current_user(
@@ -24,30 +61,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing bearer token",
         )
-
-    get_firebase_app()
-
-    try:
-        decoded_token = firebase_auth.verify_id_token(credentials.credentials)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        ) from exc
-
-    uid = decoded_token["uid"]
-
-    # Role rides along as a custom claim on the verified token (see
-    # /auth/claims and the admin custom-token login) once a session has been
-    # through that flow - no Firestore read needed on the hot path. Tokens
-    # minted before that (older sessions, or the brief window right after
-    # signup before the claim's been synced) fall back to the old lookup.
-    role = decoded_token.get("role")
-    if role is None:
-        user_doc = get_firestore_client().collection("users").document(uid).get()
-        role = user_doc.to_dict().get("role") if user_doc.exists else None
-
-    return CurrentUser(uid=uid, email=decoded_token.get("email"), role=role)
+    return resolve_current_user(credentials.credentials)
 
 
 def require_role(*allowed_roles: str):

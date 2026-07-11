@@ -2,7 +2,7 @@ from datetime import datetime
 
 from app.services.fare_service import calculate_fare
 
-# Fixed rules so tests never touch Firestore.
+# Fixed rules so tests never touch the database.
 RULES = {
     "baseFare": 40.0,
     "perKmRate": 15.0,

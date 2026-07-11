@@ -120,6 +120,9 @@ class RideOut(BaseModel):
     final_fare: float | None = None
     cancellation_fee: float | None = None
     cancel_reason: str | None = None
+    share_token: str
+    rated_by_passenger: bool = False
+    rated_by_driver: bool = False
 
 
 class RideHistoryItem(BaseModel):

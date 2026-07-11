@@ -2,7 +2,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.core.firebase import get_firestore_client
+from app.db.session import get_session_factory
 
 # Peak/night windows are defined in local Dhaka time - the server itself may
 # run on UTC (most hosts do), so "now" must be converted, not taken as-is.
@@ -46,6 +46,27 @@ _rules_cache: dict | None = None
 _rules_cached_at: float = 0.0
 
 
+def _row_to_dict(row) -> dict:
+    return {
+        "baseFare": row.base_fare,
+        "perKmRate": row.per_km_rate,
+        "perMinRate": row.per_min_rate,
+        "bookingFee": row.booking_fee,
+        "minimumFare": row.minimum_fare,
+        "perKgRate": row.per_kg_rate,
+        "perM3Rate": row.per_m3_rate,
+        "poolDiscountPct": row.pool_discount_pct,
+        "peakHourMultiplier": row.peak_hour_multiplier,
+        "nightMultiplier": row.night_multiplier,
+        "surgeEnabled": row.surge_enabled,
+        "surgeCap": row.surge_cap,
+        "cancellationFee": row.cancellation_fee,
+        "cancellationFreeWindowSec": row.cancellation_free_window_sec,
+        "peakHours": row.peak_hours,
+        "nightHours": row.night_hours,
+    }
+
+
 def get_fare_rules() -> dict:
     global _rules_cache, _rules_cached_at
     if (
@@ -54,12 +75,51 @@ def get_fare_rules() -> dict:
     ):
         return dict(_rules_cache)
 
-    doc = get_firestore_client().collection("fare_rules").document("config").get()
-    rules = {**DEFAULT_FARE_RULES, **doc.to_dict()} if doc.exists else dict(DEFAULT_FARE_RULES)
+    # Local import - app.db.models would otherwise import back into this
+    # module's package before it's fully initialized.
+    from app.db.models import FareRules as FareRulesRow
+
+    with get_session_factory()() as session:
+        row = session.get(FareRulesRow, 1)
+        rules = {**DEFAULT_FARE_RULES, **_row_to_dict(row)} if row else dict(DEFAULT_FARE_RULES)
+
     _rules_cache = rules
     _rules_cached_at = time.monotonic()
     # Copies keep a caller that mutates its result from poisoning the cache.
     return dict(rules)
+
+
+def save_fare_rules(db, payload) -> None:
+    """Upserts the singleton fare_rules row from the admin pricing form and
+    invalidates the in-process cache so the very next estimate sees it."""
+    from app.db.models import FareRules as FareRulesRow
+
+    row = db.get(FareRulesRow, 1)
+    if not row:
+        row = FareRulesRow(id=1)
+        db.add(row)
+
+    row.base_fare = payload.base_fare
+    row.per_km_rate = payload.per_km_rate
+    row.per_min_rate = payload.per_min_rate
+    row.booking_fee = payload.booking_fee
+    row.minimum_fare = payload.minimum_fare
+    row.per_kg_rate = payload.per_kg_rate
+    row.per_m3_rate = payload.per_m3_rate
+    row.pool_discount_pct = payload.pool_discount_pct
+    row.peak_hour_multiplier = payload.peak_hour_multiplier
+    row.night_multiplier = payload.night_multiplier
+    row.surge_enabled = payload.surge_enabled
+    row.surge_cap = payload.surge_cap
+    row.cancellation_fee = payload.cancellation_fee
+    row.cancellation_free_window_sec = payload.cancellation_free_window_sec
+    # The admin pricing form doesn't edit peak/night windows - keep whatever
+    # is already stored, defaulting to DEFAULT_FARE_RULES for a brand new row.
+    row.peak_hours = row.peak_hours or DEFAULT_FARE_RULES["peakHours"]
+    row.night_hours = row.night_hours or DEFAULT_FARE_RULES["nightHours"]
+
+    db.commit()
+    invalidate_fare_rules_cache()
 
 
 def invalidate_fare_rules_cache() -> None:

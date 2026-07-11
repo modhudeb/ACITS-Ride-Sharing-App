@@ -6,10 +6,6 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
-class AdminLoginResponse(BaseModel):
-    custom_token: str
-
-
 class FareRules(BaseModel):
     base_fare: float = Field(ge=0)
     per_km_rate: float = Field(ge=0)

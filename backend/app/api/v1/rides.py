@@ -1,13 +1,18 @@
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from firebase_admin import firestore
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
-from app.core.firebase import get_firestore_client
 from app.core.rate_limit import rate_limit, rate_limit_by_ip
+from app.core.realtime import manager
 from app.core.security import CurrentUser, get_current_user, require_role
+from app.db.models import DriverProfile, Rating, Ride, RideMessage, RideRequest, User
+from app.db.session import get_db
 from app.models.ride import (
+    Address,
     CancelRideRequest,
     RateRideRequest,
     RideCreateRequest,
@@ -21,6 +26,7 @@ from app.services.fare_service import get_fare_rules
 router = APIRouter(prefix="/rides", tags=["rides"])
 
 ACTIVE_STATUSES = ("scheduled", "requested", "accepted", "in_progress")
+DRIVER_ACTIVE_STATUSES = ("accepted", "in_progress")
 
 # Scheduled rides must be at least this far out (otherwise book now) and at
 # most a week ahead.
@@ -31,70 +37,100 @@ MAX_SCHEDULE_AHEAD = timedelta(days=7)
 REQUEST_TTL = timedelta(minutes=3)
 
 
-def _get_user_name(uid: str) -> str | None:
-    doc = get_firestore_client().collection("users").document(uid).get()
-    return doc.to_dict().get("name") if doc.exists else None
+def _get_user_name(db: Session, uid: str) -> str | None:
+    user = db.get(User, uid)
+    return user.name if user else None
 
 
-def _ride_to_out(ride_id: str, data: dict) -> RideOut:
+def _ride_to_out(ride: Ride) -> RideOut:
     return RideOut(
-        id=ride_id,
-        passenger_id=data["passengerId"],
-        passenger_name=data.get("passengerName"),
-        driver_id=data.get("driverId"),
-        driver_name=data.get("driverName"),
-        status=data["status"],
-        pickup=data["pickup"],
-        destination=data["destination"],
-        distance_meters=data["distanceMeters"],
-        duration_seconds=data["durationSeconds"],
-        route_path=data["routePath"],
-        fare_estimate=data["fareEstimate"],
-        fare_breakdown=data["fareBreakdown"],
-        goods=data.get("goods") or {},
-        scheduled_at=data.get("scheduledAt"),
-        final_fare=data.get("finalFare"),
-        cancellation_fee=data.get("cancellationFee"),
-        cancel_reason=data.get("cancelReason"),
+        id=ride.id,
+        passenger_id=ride.passenger_id,
+        passenger_name=ride.passenger_name,
+        driver_id=ride.driver_id,
+        driver_name=ride.driver_name,
+        status=ride.status,
+        pickup=Address(lat=ride.pickup_lat, lng=ride.pickup_lng, address=ride.pickup_address),
+        destination=Address(
+            lat=ride.destination_lat, lng=ride.destination_lng, address=ride.destination_address
+        ),
+        distance_meters=ride.distance_meters,
+        duration_seconds=ride.duration_seconds,
+        route_path=ride.route_path,
+        fare_estimate=ride.fare_estimate,
+        fare_breakdown=ride.fare_breakdown,
+        goods={
+            "weight_kg": ride.goods_weight_kg,
+            "volume_m3": ride.goods_volume_m3,
+            "description": ride.goods_description,
+        },
+        scheduled_at=ride.scheduled_at,
+        final_fare=ride.final_fare,
+        cancellation_fee=ride.cancellation_fee,
+        cancel_reason=ride.cancel_reason,
+        share_token=ride.share_token,
+        rated_by_passenger=ride.rated_by_passenger,
+        rated_by_driver=ride.rated_by_driver,
     )
 
 
-def _get_ride_or_404(db, ride_id: str):
-    ride_ref = db.collection("rides").document(ride_id)
-    snapshot = ride_ref.get()
-    if not snapshot.exists:
+def _get_ride_or_404(db: Session, ride_id: str) -> Ride:
+    ride = db.get(Ride, ride_id)
+    if not ride:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
-    return ride_ref, snapshot
+    return ride
 
 
-def broadcast_ride_request(db, ride_id: str, ride_data: dict) -> None:
-    """Publish the doc online drivers listen to. Shared with the scheduler."""
-    db.collection("ride_requests").document(ride_id).set(
-        {
-            "rideId": ride_id,
-            "passengerName": ride_data.get("passengerName"),
-            "pickup": ride_data["pickup"],
-            "destination": ride_data["destination"],
-            "goods": ride_data.get("goods") or {},
-            "distanceMeters": ride_data["distanceMeters"],
-            "durationSeconds": ride_data["durationSeconds"],
-            "fareEstimate": ride_data["fareEstimate"],
-            "geohash": geohash.encode(
-                ride_data["pickup"]["lat"], ride_data["pickup"]["lng"]
-            ),
-            "status": "pending",
-            "declinedBy": [],
-            "createdAt": firestore.SERVER_TIMESTAMP,
-            "expiresAt": datetime.now(timezone.utc) + REQUEST_TTL,
-        }
-    )
-
-
-def _ensure_participant(data: dict, current_user: CurrentUser):
+def _ensure_participant(ride: Ride, current_user: CurrentUser):
     if current_user.role == "admin":
         return
-    if current_user.uid not in (data.get("passengerId"), data.get("driverId")):
+    if current_user.uid not in (ride.passenger_id, ride.driver_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this ride")
+
+
+def _push_ride(ride: Ride) -> None:
+    """Push the ride's full new state to anyone watching it directly, and
+    signal both participants' "do I have an active ride" listeners plus the
+    admin console to refetch their small list views."""
+    payload = _ride_to_out(ride).model_dump(mode="json")
+    manager.broadcast(f"ride:{ride.id}", {"topic": f"ride:{ride.id}", "type": "state", "data": payload})
+    manager.broadcast(f"rides:{ride.passenger_id}", {"topic": f"rides:{ride.passenger_id}", "type": "signal"})
+    if ride.driver_id:
+        manager.broadcast(f"rides:{ride.driver_id}", {"topic": f"rides:{ride.driver_id}", "type": "signal"})
+    manager.broadcast("admin_ops", {"topic": "admin_ops", "type": "signal"})
+
+
+def _push_driver_feed() -> None:
+    manager.broadcast("driver_feed", {"topic": "driver_feed", "type": "signal"})
+
+
+def broadcast_ride_request(db: Session, ride: Ride) -> None:
+    """Publish the row online drivers' pending-request feed picks up -
+    shared with the scheduled-ride promotion sweep."""
+    db.add(
+        RideRequest(
+            ride_id=ride.id,
+            passenger_name=ride.passenger_name,
+            pickup={"lat": ride.pickup_lat, "lng": ride.pickup_lng, "address": ride.pickup_address},
+            destination={
+                "lat": ride.destination_lat,
+                "lng": ride.destination_lng,
+                "address": ride.destination_address,
+            },
+            goods={"weight_kg": ride.goods_weight_kg, "volume_m3": ride.goods_volume_m3},
+            distance_meters=ride.distance_meters,
+            duration_seconds=ride.duration_seconds,
+            fare_estimate=ride.fare_estimate,
+            geohash=geohash.encode(ride.pickup_lat, ride.pickup_lng),
+            status="pending",
+            declined_by=[],
+            created_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + REQUEST_TTL,
+        )
+    )
+    # Caller broadcasts driver_feed itself, after its own commit() - a
+    # subscriber that refetches on a signal fired before the transaction
+    # commits could miss the very row that signal was about.
 
 
 @router.post("", response_model=RideOut)
@@ -102,18 +138,12 @@ async def create_ride(
     payload: RideCreateRequest,
     current_user: CurrentUser = Depends(require_role("passenger")),
     _: CurrentUser = Depends(rate_limit("rides.create", max_calls=5, window_seconds=60)),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-
-    # Equality + "in" + limit(1) - no composite index needed, and caps this
-    # at one read instead of streaming the passenger's entire ride history
-    # (which used to grow, and get re-read, forever).
-    existing_active = list(
-        db.collection("rides")
-        .where("passengerId", "==", current_user.uid)
-        .where("status", "in", list(ACTIVE_STATUSES))
-        .limit(1)
-        .stream()
+    existing_active = (
+        db.query(Ride)
+        .filter(Ride.passenger_id == current_user.uid, Ride.status.in_(ACTIVE_STATUSES))
+        .first()
     )
     if existing_active:
         raise HTTPException(
@@ -155,157 +185,203 @@ async def create_ride(
         rules=rules,
     )
 
-    ride_ref = db.collection("rides").document()
-    goods = payload.goods.model_dump()
-    passenger_name = _get_user_name(current_user.uid)
-
-    ride_data = {
-        "passengerId": current_user.uid,
-        "passengerName": passenger_name,
-        "driverId": None,
-        "driverName": None,
-        "status": "scheduled" if scheduled_at else "requested",
-        "scheduledAt": scheduled_at,
+    ride = Ride(
+        id=str(uuid.uuid4()),
+        passenger_id=current_user.uid,
+        passenger_name=_get_user_name(db, current_user.uid),
+        status="scheduled" if scheduled_at else "requested",
+        scheduled_at=scheduled_at,
         # Present only while waiting to be broadcast - the sweeper range-scans
-        # this field and deletes it on promotion, so far-future scheduled
-        # rides are never re-read sweep after sweep (see expiry_service).
-        **(
-            {"scheduleBroadcastAt": scheduled_at - SCHEDULE_BROADCAST_LEAD}
-            if scheduled_at
-            else {}
-        ),
-        "pickup": payload.pickup.model_dump(),
-        "destination": payload.destination.model_dump(),
-        "distanceMeters": route["distance_meters"],
-        "durationSeconds": route["duration_seconds"],
-        "routePath": route["route_path"],
-        "fareEstimate": fare["total"],
-        "fareBreakdown": fare,
-        "goods": goods,
-        "cancelReason": None,
+        # this column and clears it on promotion, so far-future scheduled
+        # rides are never re-scanned sweep after sweep (see expiry_service).
+        schedule_broadcast_at=(scheduled_at - SCHEDULE_BROADCAST_LEAD) if scheduled_at else None,
+        pickup_lat=payload.pickup.lat,
+        pickup_lng=payload.pickup.lng,
+        pickup_address=payload.pickup.address,
+        destination_lat=payload.destination.lat,
+        destination_lng=payload.destination.lng,
+        destination_address=payload.destination.address,
+        distance_meters=route["distance_meters"],
+        duration_seconds=route["duration_seconds"],
+        route_path=route["route_path"],
+        fare_estimate=fare["total"],
+        fare_breakdown=fare,
+        goods_weight_kg=payload.goods.weight_kg,
+        goods_volume_m3=payload.goods.volume_m3,
+        goods_description=payload.goods.description,
         # Random token gating the public share-my-trip page.
-        "shareToken": secrets.token_urlsafe(16),
-        "requestedAt": firestore.SERVER_TIMESTAMP,
-    }
-    ride_ref.set(ride_data)
+        share_token=secrets.token_urlsafe(16),
+        requested_at=datetime.now(timezone.utc),
+    )
+    db.add(ride)
 
     # Scheduled rides are broadcast to drivers later by the background
     # sweeper, shortly before their pickup time.
     if not scheduled_at:
-        broadcast_ride_request(db, ride_ref.id, ride_data)
+        broadcast_ride_request(db, ride)
 
-    return _ride_to_out(ride_ref.id, ride_data)
+    db.commit()
+    db.refresh(ride)
+    _push_ride(ride)
+    if not scheduled_at:
+        _push_driver_feed()
+    return _ride_to_out(ride)
+
+
+@router.get("/active", response_model=list[RideOut])
+def get_active_rides(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Backs the "do I currently have an active ride" hooks - they get a
+    signal on the rides:{uid} topic and refetch this instead of trying to
+    reconstruct list state purely from a stream of partial WS events."""
+    rides = (
+        db.query(Ride)
+        .filter(
+            or_(Ride.passenger_id == current_user.uid, Ride.driver_id == current_user.uid),
+            Ride.status.in_(ACTIVE_STATUSES),
+        )
+        .order_by(Ride.requested_at.desc())
+        .limit(10)
+        .all()
+    )
+    return [_ride_to_out(r) for r in rides]
+
+
+@router.get("/pending")
+def get_pending_requests(
+    current_user: CurrentUser = Depends(require_role("driver", "admin")),
+    db: Session = Depends(get_db),
+):
+    """A driver's live pending-request feed - refetched whenever the
+    driver_feed WS topic signals a change (new request, or one taken/expired)."""
+    now = datetime.now(timezone.utc)
+    requests = (
+        db.query(RideRequest)
+        .filter(RideRequest.status == "pending", RideRequest.expires_at > now)
+        .order_by(RideRequest.created_at.asc())
+        .limit(100)
+        .all()
+    )
+    return [
+        {
+            "ride_id": r.ride_id,
+            "passenger_name": r.passenger_name,
+            "pickup": r.pickup,
+            "destination": r.destination,
+            "goods": r.goods,
+            "distance_meters": r.distance_meters,
+            "duration_seconds": r.duration_seconds,
+            "fare_estimate": r.fare_estimate,
+            "expires_at": r.expires_at.isoformat(),
+        }
+        for r in requests
+        if current_user.uid not in (r.declined_by or [])
+    ]
 
 
 @router.get("/history", response_model=list[RideHistoryItem])
-def get_ride_history(current_user: CurrentUser = Depends(get_current_user)):
+def get_ride_history(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if current_user.role not in ("passenger", "driver"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not available for this role",
         )
 
-    db = get_firestore_client()
-    field = "passengerId" if current_user.role == "passenger" else "driverId"
-    # Equality + "in" + limit needs no composite index (unlike adding
-    # order_by on a third field would). This used to stream every ride the
-    # user was ever part of, active or not, to find just the terminal ones -
-    # now only terminal-status rides are read, capped well above the 50 we
-    # actually return.
-    query = (
-        db.collection("rides")
-        .where(field, "==", current_user.uid)
-        .where("status", "in", ["completed", "cancelled"])
-        .limit(200)
+    field = Ride.passenger_id if current_user.role == "passenger" else Ride.driver_id
+    rides = (
+        db.query(Ride)
+        .filter(field == current_user.uid, Ride.status.in_(["completed", "cancelled"]))
+        .order_by(Ride.requested_at.desc())
+        .limit(50)
+        .all()
     )
 
     items = []
-    for doc in query.stream():
-        data = doc.to_dict()
-
+    for ride in rides:
         counterparty_name = (
-            data.get("driverName")
-            if current_user.role == "passenger"
-            else data.get("passengerName")
+            ride.driver_name if current_user.role == "passenger" else ride.passenger_name
         )
-        requested_at = data.get("requestedAt")
-        completed_at = data.get("completedAt")
-
         items.append(
             RideHistoryItem(
-                id=doc.id,
+                id=ride.id,
                 role=current_user.role,
                 counterparty_name=counterparty_name,
-                status=data["status"],
-                pickup=data["pickup"],
-                destination=data["destination"],
-                distance_meters=data["distanceMeters"],
-                duration_seconds=data["durationSeconds"],
-                fare_estimate=data["fareEstimate"],
-                goods=data.get("goods") or {},
-                final_fare=data.get("finalFare"),
-                cancellation_fee=data.get("cancellationFee"),
-                cancel_reason=data.get("cancelReason"),
-                rated_by_me=bool(
-                    data.get(
-                        "ratedByPassenger"
-                        if current_user.role == "passenger"
-                        else "ratedByDriver"
-                    )
+                status=ride.status,
+                pickup=Address(lat=ride.pickup_lat, lng=ride.pickup_lng, address=ride.pickup_address),
+                destination=Address(
+                    lat=ride.destination_lat, lng=ride.destination_lng, address=ride.destination_address
                 ),
-                requested_at=requested_at.isoformat() if requested_at else None,
-                completed_at=completed_at.isoformat() if completed_at else None,
+                distance_meters=ride.distance_meters,
+                duration_seconds=ride.duration_seconds,
+                fare_estimate=ride.fare_estimate,
+                goods={"weight_kg": ride.goods_weight_kg, "volume_m3": ride.goods_volume_m3},
+                final_fare=ride.final_fare,
+                cancellation_fee=ride.cancellation_fee,
+                cancel_reason=ride.cancel_reason,
+                rated_by_me=ride.rated_by_passenger if current_user.role == "passenger" else ride.rated_by_driver,
+                requested_at=ride.requested_at.isoformat() if ride.requested_at else None,
+                completed_at=ride.completed_at.isoformat() if ride.completed_at else None,
             )
         )
 
-    items.sort(key=lambda item: item.requested_at or "", reverse=True)
-    return items[:50]
+    return items
 
 
 @router.get("/{ride_id}/shared", dependencies=[Depends(rate_limit_by_ip("rides.shared", max_calls=30, window_seconds=60))])
-def get_shared_ride(ride_id: str, token: str):
+def get_shared_ride(ride_id: str, token: str, db: Session = Depends(get_db)):
     """Public, token-gated view for the share-my-trip page - no login needed.
 
     Returns only what a family member needs to follow the trip; polled by the
-    share page since anonymous viewers can't hold Firestore listeners.
+    share page since anonymous viewers can't hold a realtime subscription.
     """
-    db = get_firestore_client()
-    _, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
+    ride = _get_ride_or_404(db, ride_id)
 
-    if not token or data.get("shareToken") != token:
+    if not token or ride.share_token != token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid share link")
 
     driver_location = None
     vehicle = None
-    if data.get("driverId"):
-        profile = db.collection("driver_profiles").document(data["driverId"]).get()
-        if profile.exists:
-            profile_data = profile.to_dict()
-            loc = profile_data.get("currentLocation") or {}
-            if loc.get("lat") is not None:
-                driver_location = {"lat": loc["lat"], "lng": loc["lng"]}
-            vehicle = profile_data.get("vehicle")
+    if ride.driver_id:
+        profile = db.get(DriverProfile, ride.driver_id)
+        if profile and profile.current_lat is not None:
+            driver_location = {"lat": profile.current_lat, "lng": profile.current_lng}
+        if profile and profile.vehicle_type:
+            vehicle = {
+                "type": profile.vehicle_type,
+                "model": profile.vehicle_model,
+                "plate": profile.plate_number,
+            }
 
     return {
-        "status": data["status"],
-        "passenger_name": data.get("passengerName"),
-        "driver_name": data.get("driverName"),
+        "status": ride.status,
+        "passenger_name": ride.passenger_name,
+        "driver_name": ride.driver_name,
         "vehicle": vehicle,
-        "pickup": data["pickup"],
-        "destination": data["destination"],
-        "route_path": data["routePath"],
+        "pickup": {"lat": ride.pickup_lat, "lng": ride.pickup_lng, "address": ride.pickup_address},
+        "destination": {
+            "lat": ride.destination_lat,
+            "lng": ride.destination_lng,
+            "address": ride.destination_address,
+        },
+        "route_path": ride.route_path,
         "driver_location": driver_location,
     }
 
 
 @router.get("/{ride_id}", response_model=RideOut)
-def get_ride(ride_id: str, current_user: CurrentUser = Depends(get_current_user)):
-    db = get_firestore_client()
-    _, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
-    _ensure_participant(data, current_user)
-    return _ride_to_out(ride_id, data)
+def get_ride(
+    ride_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    ride = _get_ride_or_404(db, ride_id)
+    _ensure_participant(ride, current_user)
+    return _ride_to_out(ride)
 
 
 @router.post("/{ride_id}/cancel", response_model=RideOut)
@@ -313,13 +389,12 @@ def cancel_ride(
     ride_id: str,
     payload: CancelRideRequest,
     current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-    ride_ref, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
-    _ensure_participant(data, current_user)
+    ride = _get_ride_or_404(db, ride_id)
+    _ensure_participant(ride, current_user)
 
-    if data["status"] not in ("scheduled", "requested", "accepted"):
+    if ride.status not in ("scheduled", "requested", "accepted"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ride can no longer be cancelled",
@@ -328,39 +403,38 @@ def cancel_ride(
     # Passengers cancelling after a driver committed (past the free window) pay
     # a fee; drivers/admins cancelling never charge the passenger.
     cancellation_fee = 0.0
-    accepted_at = data.get("acceptedAt")
     if (
-        current_user.uid == data.get("passengerId")
-        and data["status"] == "accepted"
-        and accepted_at is not None
+        current_user.uid == ride.passenger_id
+        and ride.status == "accepted"
+        and ride.accepted_at is not None
     ):
         rules = get_fare_rules()
         free_window = timedelta(seconds=rules.get("cancellationFreeWindowSec", 120))
-        if datetime.now(timezone.utc) - accepted_at > free_window:
+        if datetime.now(timezone.utc) - ride.accepted_at > free_window:
             cancellation_fee = float(rules.get("cancellationFee", 0))
 
-    updates = {
-        "status": "cancelled",
-        "cancelReason": payload.reason or "Cancelled",
-        "cancellationFee": cancellation_fee,
-    }
-    ride_ref.update(
-        {
-            **updates,
-            "cancelledAt": firestore.SERVER_TIMESTAMP,
-            # A cancelled scheduled ride must not linger in the sweeper's
-            # scheduleBroadcastAt scan; deleting a field that isn't set is a
-            # no-op, so this is safe for ordinary rides too.
-            "scheduleBroadcastAt": firestore.DELETE_FIELD,
-        }
-    )
-    # Delete rather than mark cancelled - a broadcast doc has no purpose once
-    # the ride it points to is dead, and leaving it around just means every
-    # future sweep/surge scan pays to re-read and re-discard it forever.
-    db.collection("ride_requests").document(ride_id).delete()
+    ride.status = "cancelled"
+    ride.cancel_reason = payload.reason or "Cancelled"
+    ride.cancellation_fee = cancellation_fee
+    ride.cancelled_at = datetime.now(timezone.utc)
+    # A cancelled scheduled ride must not linger in the sweeper's
+    # schedule_broadcast_at scan.
+    ride.schedule_broadcast_at = None
 
-    data.update(updates)
-    return _ride_to_out(ride_id, data)
+    # Delete rather than mark cancelled - a broadcast row has no purpose once
+    # the ride it points to is dead, and leaving it around just means every
+    # future sweep pays to re-scan and re-discard it forever.
+    ride_request = db.get(RideRequest, ride_id)
+    had_request = bool(ride_request)
+    if ride_request:
+        db.delete(ride_request)
+
+    db.commit()
+    db.refresh(ride)
+    _push_ride(ride)
+    if had_request:
+        _push_driver_feed()
+    return _ride_to_out(ride)
 
 
 @router.post("/{ride_id}/accept", response_model=RideOut)
@@ -368,84 +442,89 @@ def accept_ride(
     ride_id: str,
     current_user: CurrentUser = Depends(require_role("driver")),
     _: CurrentUser = Depends(rate_limit("rides.accept", max_calls=20, window_seconds=60)),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-
-    driver_ref = db.collection("driver_profiles").document(current_user.uid)
-    driver_profile = driver_ref.get()
-    profile_data = driver_profile.to_dict() if driver_profile.exists else {}
-
-    if profile_data.get("onlineStatus") != "online":
+    # Row-locking the driver's own profile serializes concurrent accept calls
+    # for the same driver, so two requests accepted back-to-back can't both
+    # read the same stale "capacity remaining" snapshot - the Postgres
+    # equivalent of the guarantee the old Firestore transaction gave.
+    driver_profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.uid == current_user.uid)
+        .with_for_update()
+        .first()
+    )
+    if not driver_profile or driver_profile.online_status != "online":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You must be online to accept rides",
         )
 
-    capacity = profile_data.get("capacity")
+    capacity = driver_profile.capacity
     if not capacity:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Set up your vehicle details before accepting rides",
         )
 
-    ride_ref = db.collection("rides").document(ride_id)
-    ride_request_ref = db.collection("ride_requests").document(ride_id)
-    active_rides_query = db.collection("rides").where("driverId", "==", current_user.uid)
-    driver_name = _get_user_name(current_user.uid)
+    ride = db.query(Ride).filter(Ride.id == ride_id).with_for_update().first()
+    if not ride:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
+    if ride.status != "requested" or ride.driver_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ride is no longer available",
+        )
 
-    transaction = db.transaction()
+    # Pooled capacity ledger: the vehicle's remaining space is its capacity
+    # minus everything already on board or committed to. Pure math lives in
+    # capacity_service so it's unit-tested without needing a real transaction
+    # to exercise it.
+    active_rides = (
+        db.query(Ride)
+        .filter(Ride.driver_id == current_user.uid, Ride.status.in_(DRIVER_ACTIVE_STATUSES))
+        .all()
+    )
+    active_rides_dicts = [
+        {"status": r.status, "goods": {"weight_kg": r.goods_weight_kg, "volume_m3": r.goods_volume_m3}}
+        for r in active_rides
+    ]
+    goods = {"weight_kg": ride.goods_weight_kg, "volume_m3": ride.goods_volume_m3}
+    fits, reason = capacity_service.check_capacity(capacity, active_rides_dicts, goods)
+    if not fits:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=reason)
 
-    @firestore.transactional
-    def _accept(transaction):
-        snapshot = ride_ref.get(transaction=transaction)
-        if not snapshot.exists:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
+    ride.driver_id = current_user.uid
+    ride.driver_name = _get_user_name(db, current_user.uid)
+    ride.status = "accepted"
+    ride.accepted_at = datetime.now(timezone.utc)
 
-        data = snapshot.to_dict()
-        if data["status"] != "requested" or data.get("driverId"):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Ride is no longer available",
-            )
+    ride_request = db.get(RideRequest, ride_id)
+    if ride_request:
+        db.delete(ride_request)
 
-        # Pooled capacity ledger: the vehicle's remaining space is its
-        # capacity minus everything already on board or committed to. Pure
-        # math lives in capacity_service so it's unit-tested without needing
-        # a Firestore transaction to exercise it.
-        active_rides = [doc.to_dict() for doc in transaction.get(active_rides_query)]
-        goods = data.get("goods") or {}
-        fits, reason = capacity_service.check_capacity(capacity, active_rides, goods)
-        if not fits:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=reason)
-
-        updates = {
-            "driverId": current_user.uid,
-            "driverName": driver_name,
-            "status": "accepted",
-        }
-        transaction.update(ride_ref, {**updates, "acceptedAt": firestore.SERVER_TIMESTAMP})
-        # Delete rather than mark matched - see cancel_ride for why broadcast
-        # docs don't stick around once they're no longer live.
-        transaction.delete(ride_request_ref)
-
-        data.update(updates)
-        return data
-
-    updated_data = _accept(transaction)
-    return _ride_to_out(ride_id, updated_data)
+    db.commit()
+    db.refresh(ride)
+    _push_ride(ride)
+    _push_driver_feed()
+    return _ride_to_out(ride)
 
 
 @router.post("/{ride_id}/reject")
 def reject_ride(
     ride_id: str,
     current_user: CurrentUser = Depends(require_role("driver")),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-    ride_request_ref = db.collection("ride_requests").document(ride_id)
-    if not ride_request_ref.get().exists:
+    ride_request = db.get(RideRequest, ride_id)
+    if not ride_request:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride request not found")
 
-    ride_request_ref.update({"declinedBy": firestore.ArrayUnion([current_user.uid])})
+    declined = set(ride_request.declined_by or [])
+    declined.add(current_user.uid)
+    ride_request.declined_by = list(declined)
+    db.commit()
+    manager.broadcast(f"rides:{current_user.uid}", {"topic": f"rides:{current_user.uid}", "type": "signal"})
     return {"status": "ok"}
 
 
@@ -453,24 +532,24 @@ def reject_ride(
 def start_ride(
     ride_id: str,
     current_user: CurrentUser = Depends(require_role("driver")),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-    ride_ref, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
+    ride = _get_ride_or_404(db, ride_id)
 
-    if data.get("driverId") != current_user.uid:
+    if ride.driver_id != current_user.uid:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your ride")
-    if data["status"] != "accepted":
+    if ride.status != "accepted":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ride cannot be started from its current status",
         )
 
-    updates = {"status": "in_progress"}
-    ride_ref.update({**updates, "startedAt": firestore.SERVER_TIMESTAMP})
-
-    data.update(updates)
-    return _ride_to_out(ride_id, data)
+    ride.status = "in_progress"
+    ride.started_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(ride)
+    _push_ride(ride)
+    return _ride_to_out(ride)
 
 
 @router.post("/{ride_id}/rate")
@@ -479,82 +558,64 @@ def rate_ride(
     payload: RateRideRequest,
     current_user: CurrentUser = Depends(get_current_user),
     _: CurrentUser = Depends(rate_limit("rides.rate", max_calls=10, window_seconds=60)),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-    ride_ref = db.collection("rides").document(ride_id)
-    transaction = db.transaction()
+    # Row-locking the ride keeps two concurrent rate calls for the same ride
+    # from both passing the "already rated" check - the Postgres equivalent
+    # of the all-reads-before-any-writes Firestore transaction this replaced.
+    ride = db.query(Ride).filter(Ride.id == ride_id).with_for_update().first()
+    if not ride:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
 
-    # Everything - the "already rated" check, the rating doc, the ride flag,
-    # and the running average - lives in one transaction now. It used to
-    # check-then-write outside any transaction, so two concurrent rate calls
-    # for the same ride could both pass the "already rated" check and both
-    # count toward the average.
-    @firestore.transactional
-    def _rate(transaction):
-        snapshot = ride_ref.get(transaction=transaction)
-        if not snapshot.exists:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
-        data = snapshot.to_dict()
+    if current_user.uid == ride.passenger_id:
+        rater_role = "passenger"
+        rated_uid = ride.driver_id
+    elif current_user.uid == ride.driver_id:
+        rater_role = "driver"
+        rated_uid = ride.passenger_id
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this ride")
 
-        if current_user.uid == data.get("passengerId"):
-            rater_role = "passenger"
-            rated_uid = data.get("driverId")
-            flag_field = "ratedByPassenger"
-        elif current_user.uid == data.get("driverId"):
-            rater_role = "driver"
-            rated_uid = data.get("passengerId")
-            flag_field = "ratedByDriver"
-        else:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this ride")
+    if ride.status != "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only completed rides can be rated")
+    already_rated = ride.rated_by_passenger if rater_role == "passenger" else ride.rated_by_driver
+    if already_rated:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="You already rated this ride")
+    if not rated_uid:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nobody to rate")
 
-        if data["status"] != "completed":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Only completed rides can be rated",
-            )
-        if data.get(flag_field):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="You already rated this ride",
-            )
-        if not rated_uid:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nobody to rate")
+    # Passengers are rated on driver_profiles; drivers are rated on users -
+    # lock whichever row is being updated so its running average can't race
+    # with another rating landing on the same profile at the same time.
+    if rater_role == "passenger":
+        profile = db.query(DriverProfile).filter(DriverProfile.uid == rated_uid).with_for_update().first()
+    else:
+        profile = db.query(User).filter(User.uid == rated_uid).with_for_update().first()
 
-        profile_ref = (
-            db.collection("driver_profiles").document(rated_uid)
-            if rater_role == "passenger"
-            else db.collection("users").document(rated_uid)
-        )
-        profile = profile_ref.get(transaction=transaction)
-        existing = (profile.to_dict() or {}).get("rating") or {}
-        count = existing.get("count", 0)
-        avg = existing.get("avg", 0.0)
-        new_count = count + 1
-        new_avg = round((avg * count + payload.rating) / new_count, 2)
+    count = profile.rating_count if profile else 0
+    avg = profile.rating_avg if profile else 0.0
+    new_count = count + 1
+    new_avg = round((avg * count + payload.rating) / new_count, 2)
 
-        # All reads are done - writes from here on.
-        transaction.set(
-            db.collection("ratings").document(ride_id),
-            {
-                "rideId": ride_id,
-                "passengerId": data.get("passengerId"),
-                "driverId": data.get("driverId"),
-                f"by_{rater_role}": {
-                    "rating": payload.rating,
-                    "comment": payload.comment,
-                    "at": firestore.SERVER_TIMESTAMP,
-                },
-            },
-            merge=True,
-        )
-        transaction.update(ride_ref, {flag_field: True})
-        transaction.set(
-            profile_ref,
-            {"rating": {"avg": new_avg, "count": new_count}},
-            merge=True,
-        )
+    rating_row = db.get(Rating, ride_id)
+    if not rating_row:
+        rating_row = Rating(ride_id=ride_id, passenger_id=ride.passenger_id, driver_id=ride.driver_id)
+        db.add(rating_row)
 
-    _rate(transaction)
+    entry = {"rating": payload.rating, "comment": payload.comment, "at": datetime.now(timezone.utc).isoformat()}
+    if rater_role == "passenger":
+        rating_row.by_passenger = entry
+        ride.rated_by_passenger = True
+    else:
+        rating_row.by_driver = entry
+        ride.rated_by_driver = True
+
+    if profile:
+        profile.rating_avg = new_avg
+        profile.rating_count = new_count
+
+    db.commit()
+    _push_ride(ride)
     return {"status": "ok"}
 
 
@@ -562,21 +623,93 @@ def rate_ride(
 def complete_ride(
     ride_id: str,
     current_user: CurrentUser = Depends(require_role("driver")),
+    db: Session = Depends(get_db),
 ):
-    db = get_firestore_client()
-    ride_ref, snapshot = _get_ride_or_404(db, ride_id)
-    data = snapshot.to_dict()
+    ride = _get_ride_or_404(db, ride_id)
 
-    if data.get("driverId") != current_user.uid:
+    if ride.driver_id != current_user.uid:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your ride")
-    if data["status"] != "in_progress":
+    if ride.status != "in_progress":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ride cannot be completed from its current status",
         )
 
-    updates = {"status": "completed", "finalFare": data["fareEstimate"]}
-    ride_ref.update({**updates, "completedAt": firestore.SERVER_TIMESTAMP})
+    ride.status = "completed"
+    ride.final_fare = ride.fare_estimate
+    ride.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(ride)
+    _push_ride(ride)
+    return _ride_to_out(ride)
 
-    data.update(updates)
-    return _ride_to_out(ride_id, data)
+
+# --- In-ride chat -----------------------------------------------------
+
+@router.get("/{ride_id}/messages")
+def get_ride_messages(
+    ride_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    ride = _get_ride_or_404(db, ride_id)
+    _ensure_participant(ride, current_user)
+    messages = (
+        db.query(RideMessage)
+        .filter(RideMessage.ride_id == ride_id)
+        .order_by(RideMessage.at.asc())
+        .limit(200)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "sender_id": m.sender_id,
+            "sender_name": m.sender_name,
+            "text": m.text,
+            "at": m.at.isoformat(),
+        }
+        for m in messages
+    ]
+
+
+@router.post(
+    "/{ride_id}/messages",
+    dependencies=[Depends(rate_limit("rides.chat", max_calls=30, window_seconds=60))],
+)
+def send_ride_message(
+    ride_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    ride = _get_ride_or_404(db, ride_id)
+    _ensure_participant(ride, current_user)
+
+    text = (payload.get("text") or "").strip()[:500]
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message text is required")
+
+    sender_name = _get_user_name(db, current_user.uid) or "User"
+    message = RideMessage(
+        ride_id=ride_id,
+        sender_id=current_user.uid,
+        sender_name=sender_name,
+        text=text,
+        at=datetime.now(timezone.utc),
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    payload_out = {
+        "id": message.id,
+        "sender_id": message.sender_id,
+        "sender_name": message.sender_name,
+        "text": message.text,
+        "at": message.at.isoformat(),
+    }
+    manager.broadcast(
+        f"ride_chat:{ride_id}", {"topic": f"ride_chat:{ride_id}", "type": "message", "data": payload_out}
+    )
+    return payload_out

@@ -1,46 +1,75 @@
-"""The fare-rules cache exists purely to save Firestore reads, so the thing
-worth locking in is exactly when it does and doesn't hit Firestore."""
+"""The fare-rules cache exists purely to save a database round trip per
+estimate, so the thing worth locking in is exactly when it does and doesn't
+hit the database. Runs against a real SQLite session (not a hand-rolled
+fake) so it exercises the actual SQLAlchemy query path."""
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.db.models import FareRules
+from app.db.session import Base
 from app.services import fare_service
 
 
-class FakeDoc:
-    def __init__(self, data):
-        self.exists = data is not None
-        self._data = data
+class ReadCountingSessionFactory:
+    """Wraps a real sessionmaker and counts how many sessions get() a
+    fare_rules row - i.e. how many times get_fare_rules actually hit the
+    database instead of serving from its in-process cache."""
 
-    def to_dict(self):
-        return self._data
-
-
-class FakeFirestore:
-    """Counts config-doc reads; the chained collection/document calls mirror
-    how get_fare_rules actually reaches the doc."""
-
-    def __init__(self, data):
+    def __init__(self, factory):
+        self._factory = factory
         self.reads = 0
-        self._data = data
 
-    def collection(self, name):
-        return self
+    def __call__(self):
+        session = self._factory()
+        original_get = session.get
 
-    def document(self, name):
-        return self
+        def counting_get(model, ident):
+            if model is FareRules:
+                self.reads += 1
+            return original_get(model, ident)
 
-    def get(self):
-        self.reads += 1
-        return FakeDoc(self._data)
+        session.get = counting_get
+        return session
 
 
 @pytest.fixture
 def fake_db(monkeypatch):
-    db = FakeFirestore({"baseFare": 55.0})
-    monkeypatch.setattr(fare_service, "get_firestore_client", lambda: db)
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[FareRules.__table__])
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    with factory() as session:
+        session.add(
+            FareRules(
+                id=1,
+                base_fare=55.0,
+                per_km_rate=15.0,
+                per_min_rate=2.0,
+                booking_fee=20.0,
+                minimum_fare=80.0,
+                per_kg_rate=0.5,
+                per_m3_rate=30.0,
+                pool_discount_pct=20.0,
+                peak_hour_multiplier=1.2,
+                night_multiplier=1.15,
+                surge_enabled=True,
+                surge_cap=2.5,
+                cancellation_fee=30.0,
+                cancellation_free_window_sec=120,
+                peak_hours=[[7, 10], [17, 20]],
+                night_hours=[22, 6],
+            )
+        )
+        session.commit()
+
+    counting_factory = ReadCountingSessionFactory(factory)
+    monkeypatch.setattr(fare_service, "get_session_factory", lambda: counting_factory)
     fare_service.invalidate_fare_rules_cache()
-    yield db
+    yield counting_factory
     fare_service.invalidate_fare_rules_cache()
+    engine.dispose()
 
 
 def test_second_call_within_ttl_reads_from_cache(fake_db):
@@ -48,7 +77,7 @@ def test_second_call_within_ttl_reads_from_cache(fake_db):
     second = fare_service.get_fare_rules()
     assert fake_db.reads == 1
     assert first == second
-    assert first["baseFare"] == 55.0  # Firestore value overrides the default
+    assert first["baseFare"] == 55.0  # database value overrides the default
 
 
 def test_invalidate_forces_a_fresh_read(fake_db):

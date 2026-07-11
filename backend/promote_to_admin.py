@@ -1,4 +1,4 @@
-"""One-off: promote an existing signed-up user to the admin role in Firestore.
+"""One-off: promote an existing signed-up user to the admin role.
 
 Usage:
     cd backend
@@ -6,15 +6,17 @@ Usage:
 """
 import sys
 
-from app.core.firebase import get_firebase_app, get_firestore_client
-from firebase_admin import auth as fb_auth
-
-get_firebase_app()
+from app.db.models import User
+from app.db.session import get_session_factory
 
 email = sys.argv[1]
 
-user = fb_auth.get_user_by_email(email)
-db = get_firestore_client()
-db.collection("users").document(user.uid).update({"role": "admin", "status": "active"})
+with get_session_factory()() as session:
+    user = session.query(User).filter(User.email == email).first()
+    if not user:
+        sys.exit(f"No account found for {email} - have they signed up yet?")
+    user.role = "admin"
+    user.status = "active"
+    session.commit()
 
 print(f"Promoted {email} (uid={user.uid}) to admin.")
