@@ -7,6 +7,7 @@ import { REDIRECT_URL_KEY } from '@/constants/app.constant'
 import { useNavigate } from 'react-router'
 import { realtimeClient } from '@/services/realtime/RealtimeClient'
 import useRealtimeTopic from '@/utils/hooks/useRealtimeTopic'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 const IsolatedNavigator = ({ ref }) => {
     const navigate = useNavigate()
@@ -95,19 +96,30 @@ function AuthProvider({ children }) {
         } catch (errors) {
             return {
                 status: 'failed',
-                message:
-                    errors?.response?.data?.message ||
-                    errors?.message ||
-                    errors.toString(),
+                message: getApiErrorMessage(errors, 'Unable to sign in'),
             }
         }
     }
 
-    const signUp = async (values) => {
+    // `options.onBeforeRedirect` runs (and is awaited) after sign-in but
+    // before the post-signup redirect. The driver signup uses it to persist
+    // vehicle details so they're guaranteed on the backend row before the
+    // driver lands on DriverHome - otherwise DriverHome can race the save and
+    // re-prompt for setup. `options.onBeforeRedirectError` receives any error
+    // so the caller can surface it; the account is already created, so we
+    // still redirect and let DriverHome's setup card handle recovery.
+    const signUp = async (values, options = {}) => {
         try {
             const resp = await apiSignUp(values)
             if (resp) {
                 handleSignIn({ accessToken: resp.token }, resp.user)
+                if (options.onBeforeRedirect) {
+                    try {
+                        await options.onBeforeRedirect()
+                    } catch (err) {
+                        options.onBeforeRedirectError?.(err)
+                    }
+                }
                 redirect()
                 return {
                     status: 'success',
@@ -121,10 +133,7 @@ function AuthProvider({ children }) {
         } catch (errors) {
             return {
                 status: 'failed',
-                message:
-                    errors?.response?.data?.message ||
-                    errors?.message ||
-                    errors.toString(),
+                message: getApiErrorMessage(errors, 'Unable to sign up'),
             }
         }
     }
@@ -149,10 +158,7 @@ function AuthProvider({ children }) {
         } catch (errors) {
             return {
                 status: 'failed',
-                message:
-                    errors?.response?.data?.message ||
-                    errors?.message ||
-                    errors.toString(),
+                message: getApiErrorMessage(errors, 'Unable to sign in'),
             }
         }
     }

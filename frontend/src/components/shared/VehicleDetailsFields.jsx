@@ -15,10 +15,25 @@ const VEHICLE_TYPE_OPTIONS = [
     { value: CAR, label: 'Car', icon: TbCar },
 ]
 
+// Human-readable labels, shared so the signup form can show a "your vehicle
+// at a glance" summary without re-declaring them.
+export const VEHICLE_TYPE_LABELS = {
+    [TRUCK]: 'Truck',
+    [BIKE]: 'Bike',
+    [CAR]: 'Car',
+}
+
 const MODEL_PLACEHOLDER = {
     [TRUCK]: 'Truck model (e.g. Tata Ace)',
     [BIKE]: 'Bike model (e.g. Yamaha FZ)',
     [CAR]: 'Car model (e.g. Toyota Axio)',
+}
+
+const TYPE_HELP = {
+    [TRUCK]:
+        'Trucks carry pooled goods. Enter your truck’s max load so goods rides can be matched to your free cargo space.',
+    [BIKE]: 'Bikes are for you plus a small item - passengers and cargo only, no freight.',
+    [CAR]: 'Cars carry you and a few coworkers. Passengers only, no freight.',
 }
 
 export const emptyVehicleForm = {
@@ -85,6 +100,9 @@ const VehicleDetailsFields = ({ form, setField, onVehicleTypeChange }) => {
                     </Segment.Item>
                 ))}
             </Segment>
+            <p className="text-xs text-gray-400 -mt-1">
+                {TYPE_HELP[form.vehicleType]}
+            </p>
             <Input
                 placeholder={MODEL_PLACEHOLDER[form.vehicleType]}
                 value={form.vehicleModel}
@@ -97,21 +115,31 @@ const VehicleDetailsFields = ({ form, setField, onVehicleTypeChange }) => {
             />
             {form.vehicleType === TRUCK && (
                 <div className="grid grid-cols-2 gap-2">
-                    <Input
-                        type="number"
-                        min="1"
-                        placeholder="Max load (kg)"
-                        value={form.maxWeightKg}
-                        onChange={setField('maxWeightKg')}
-                    />
-                    <Input
-                        type="number"
-                        min="0.1"
-                        step="0.1"
-                        placeholder="Cargo space (m³)"
-                        value={form.maxVolumeM3}
-                        onChange={setField('maxVolumeM3')}
-                    />
+                    <div>
+                        <Input
+                            type="number"
+                            min="1"
+                            placeholder="Max load (kg)"
+                            value={form.maxWeightKg}
+                            onChange={setField('maxWeightKg')}
+                        />
+                        <p className="text-[11px] text-gray-400 mt-1">
+                            Heaviest load your truck can carry
+                        </p>
+                    </div>
+                    <div>
+                        <Input
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            placeholder="Cargo space (m³)"
+                            value={form.maxVolumeM3}
+                            onChange={setField('maxVolumeM3')}
+                        />
+                        <p className="text-[11px] text-gray-400 mt-1">
+                            Total cargo volume (length × width × height)
+                        </p>
+                    </div>
                 </div>
             )}
             <Input
@@ -122,6 +150,9 @@ const VehicleDetailsFields = ({ form, setField, onVehicleTypeChange }) => {
                 value={form.maxPassengers}
                 onChange={setField('maxPassengers')}
             />
+            <p className="text-[11px] text-gray-400 -mt-1">
+                Including yourself - how many people can ride at once.
+            </p>
         </div>
     )
 }

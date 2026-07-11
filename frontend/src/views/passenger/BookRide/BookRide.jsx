@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button'
 import Alert from '@/components/ui/Alert'
 import Card from '@/components/ui/Card'
 import Input from '@/components/ui/Input'
+import Switcher from '@/components/ui/Switcher'
 import Spinner from '@/components/ui/Spinner'
 import Notification from '@/components/ui/Notification'
 import toast from '@/components/ui/toast'
@@ -91,7 +92,7 @@ const BookRide = () => {
     const rideActive = ride && ride.status !== 'cancelled'
     const trackingDriver = ride?.status === 'accepted' || ride?.status === 'in_progress'
     const driverLocation = useDriverLocation(trackingDriver ? ride.driver_id : null)
-    const assignedDriverProfile = useDriverProfile(
+    const { profile: assignedDriverProfile } = useDriverProfile(
         trackingDriver ? ride.driver_id : null,
     )
     const driverRating = assignedDriverProfile?.rating
@@ -453,58 +454,93 @@ const BookRide = () => {
                             )}
                         </div>
                         <div className="mt-3">
-                            <label className="text-xs font-semibold text-gray-500">
-                                Carrying goods?
-                            </label>
-                            {hasGoods ? (
-                                <div className="mt-1">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-500">
+                                        Travelling with goods?
+                                    </label>
+                                    <p className="text-xs text-gray-400 mt-0.5 max-w-[16rem]">
+                                        Turn this on to reserve cargo space -
+                                        we&apos;ll match you with a truck.
+                                    </p>
+                                </div>
+                                <Switcher
+                                    checked={hasGoods}
+                                    onChange={(checked) => {
+                                        setHasGoods(checked)
+                                        if (!checked) {
+                                            setGoodsWeight('')
+                                            setGoodsVolume('')
+                                        }
+                                    }}
+                                />
+                            </div>
+                            {hasGoods && (
+                                <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
                                     <div className="grid grid-cols-2 gap-2">
-                                        <Input
-                                            size="sm"
-                                            type="number"
-                                            min="0"
-                                            placeholder="Weight (kg)"
-                                            value={goodsWeight}
-                                            onChange={(e) =>
-                                                setGoodsWeight(e.target.value)
-                                            }
-                                        />
-                                        <Input
-                                            size="sm"
-                                            type="number"
-                                            min="0"
-                                            step="0.1"
-                                            placeholder="Volume (m³)"
-                                            value={goodsVolume}
-                                            onChange={(e) =>
-                                                setGoodsVolume(e.target.value)
-                                            }
-                                        />
+                                        <div>
+                                            <Input
+                                                size="sm"
+                                                type="number"
+                                                min="0"
+                                                placeholder="Weight (kg)"
+                                                value={goodsWeight}
+                                                onChange={(e) =>
+                                                    setGoodsWeight(
+                                                        e.target.value,
+                                                    )
+                                                }
+                                            />
+                                            <p className="text-[11px] text-gray-400 mt-1">
+                                                Load you need moved
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <Input
+                                                size="sm"
+                                                type="number"
+                                                min="0"
+                                                step="0.1"
+                                                placeholder="Volume (m³)"
+                                                value={goodsVolume}
+                                                onChange={(e) =>
+                                                    setGoodsVolume(
+                                                        e.target.value,
+                                                    )
+                                                }
+                                            />
+                                            <p className="text-[11px] text-gray-400 mt-1">
+                                                Optional - e.g. 1.5 for a few
+                                                boxes
+                                            </p>
+                                        </div>
                                     </div>
+                                    {estimate?.fare_breakdown
+                                        ?.goods_surcharge > 0 && (
+                                        <p className="text-xs text-amber-600 mt-2">
+                                            +{estimate.fare_breakdown.goods_surcharge}{' '}
+                                            BDT goods handling applies
+                                        </p>
+                                    )}
+                                    {hasGoods &&
+                                        !(Number(goodsWeight) > 0) && (
+                                            <p className="text-xs text-gray-400 mt-2">
+                                                Enter a weight so we can match a
+                                                truck with enough cargo space.
+                                            </p>
+                                        )}
                                     <button
                                         type="button"
-                                        className="text-xs text-gray-400 underline mt-1"
+                                        className="text-xs text-gray-400 underline mt-2"
                                         onClick={() => {
                                             setHasGoods(false)
                                             setGoodsWeight('')
                                             setGoodsVolume('')
                                         }}
                                     >
-                                        Remove goods - just me riding
+                                        Just me - no goods
                                     </button>
                                 </div>
-                            ) : (
-                                <p className="text-xs text-gray-400 mt-1">
-                                    Riding without goods.{' '}
-                                    <button
-                                        type="button"
-                                        className="underline"
-                                        onClick={() => setHasGoods(true)}
-                                    >
-                                        Add goods
-                                    </button>{' '}
-                                    to reserve cargo space for your load (matches you with a truck).
-                                </p>
                             )}
                         </div>
                     </Card>
@@ -671,7 +707,10 @@ const BookRide = () => {
                             block
                             variant="solid"
                             loading={requesting}
-                            disabled={scheduleLater && !scheduledAt}
+                            disabled={
+                                (scheduleLater && !scheduledAt) ||
+                                (hasGoods && !(Number(goodsWeight) > 0))
+                            }
                             onClick={handleConfirmTrip}
                         >
                             {scheduleLater ? 'Schedule trip' : 'Confirm trip'}

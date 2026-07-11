@@ -22,8 +22,11 @@ const toProfile = (data) => ({
     rating: { avg: data.rating_avg || 0, count: data.rating_count || 0 },
 })
 
-// Returns undefined while the first fetch is loading, null when the driver
-// has no profile yet (fresh driver, or no uid), and the profile otherwise.
+// Returns { profile, refetch }. `profile` is undefined while the first fetch
+// is loading, null when the driver has no profile yet (fresh driver, or no
+// uid), and the profile object otherwise. `refetch` lets a screen re-read the
+// persisted row on demand - e.g. after a vehicle-setup save, or to self-heal
+// if a realtime `state` broadcast was missed on mount.
 const useDriverProfile = (uid) => {
     const [profile, setProfile] = useState(undefined)
 
@@ -41,11 +44,18 @@ const useDriverProfile = (uid) => {
         refetch()
     }, [refetch])
 
+    // A `state` push on driver_profile:{uid} means the row changed somewhere
+    // (vehicle saved, status flipped, rating updated) - re-read the
+    // authoritative row from the DB rather than trusting the pushed payload.
+    // This is what makes the "set up your vehicle" card auto-hide after a
+    // save and keeps Go Online / status in sync even when a broadcast is
+    // missed (e.g. the socket wasn't subscribed yet) or carries a stale
+    // snapshot, so the UI can't latch on a null-capacity ghost row.
     useRealtimeTopic(uid ? `driver_profile:${uid}` : null, (message) => {
-        if (message.type === 'state') setProfile(toProfile(message.data))
+        if (message.type === 'state') refetch()
     })
 
-    return profile
+    return { profile, refetch }
 }
 
 export default useDriverProfile

@@ -64,9 +64,10 @@ const goodsLabel = (goods) => {
     return `${kg} kg · ${m3} m³`
 }
 
-const VehicleSetupCard = ({ onSaved }) => {
+const VehicleSetupCard = ({ onSaved, onRefresh }) => {
     const [form, setForm] = useState(emptyVehicleForm)
     const [saving, setSaving] = useState(false)
+    const [error, setError] = useState('')
 
     const setField = (field) => (e) =>
         setForm((f) => ({ ...f, [field]: e.target.value }))
@@ -79,6 +80,7 @@ const VehicleSetupCard = ({ onSaved }) => {
 
     const handleSave = async () => {
         setSaving(true)
+        setError('')
         try {
             await apiSetVehicleDetails({
                 vehicleType: form.vehicleType,
@@ -91,6 +93,9 @@ const VehicleSetupCard = ({ onSaved }) => {
             notify('Vehicle details saved', 'success')
             onSaved?.()
         } catch (err) {
+            setError(
+                err?.response?.data?.detail || 'Could not save vehicle details',
+            )
             notify(
                 err?.response?.data?.detail || 'Could not save vehicle details',
                 'danger',
@@ -98,6 +103,11 @@ const VehicleSetupCard = ({ onSaved }) => {
         } finally {
             setSaving(false)
         }
+    }
+
+    const handleRefresh = () => {
+        setError('')
+        onRefresh?.()
     }
 
     return (
@@ -112,16 +122,29 @@ const VehicleSetupCard = ({ onSaved }) => {
                 setField={setField}
                 onVehicleTypeChange={handleVehicleTypeChange}
             />
-            <Button
-                block
-                variant="solid"
-                className="mt-2"
-                disabled={!canSave}
-                loading={saving}
-                onClick={handleSave}
+            {error && (
+                <Alert type="danger" showIcon className="mt-3">
+                    {error}
+                </Alert>
+            )}
+            <div className="flex items-center gap-2 mt-3">
+                <Button
+                    block
+                    variant="solid"
+                    disabled={!canSave}
+                    loading={saving}
+                    onClick={handleSave}
+                >
+                    Save vehicle details
+                </Button>
+            </div>
+            <button
+                type="button"
+                className="text-xs text-gray-400 underline mt-2"
+                onClick={handleRefresh}
             >
-                Save vehicle details
-            </Button>
+                I already set this up - refresh
+            </button>
         </Card>
     )
 }
@@ -260,7 +283,8 @@ const DriverHome = () => {
     const lastSentPosRef = useRef(null)
     const centeredRef = useRef(false)
 
-    const driverProfile = useDriverProfile(user.uid)
+    const { profile: driverProfile, refetch: refetchDriverProfile } =
+        useDriverProfile(user.uid)
     const onlineStatus = driverProfile?.onlineStatus || 'offline'
     const capacity = driverProfile?.capacity
 
@@ -449,6 +473,11 @@ const DriverHome = () => {
         const nextStatus = onlineStatus === 'offline' ? 'online' : 'offline'
         try {
             await apiSetDriverStatus(nextStatus)
+            // Re-read the profile from the DB so the UI flips to online/offline
+            // right away - instead of depending on the realtime broadcast, which
+            // is missed if the socket wasn't subscribed at the moment the status
+            // changed (common right after landing on DriverHome).
+            refetchDriverProfile()
         } catch (err) {
             notify(
                 err?.response?.data?.detail || 'Failed to update status',
@@ -644,7 +673,10 @@ const DriverHome = () => {
                 </Card>
 
                 {driverProfile !== undefined && !capacity && (
-                    <VehicleSetupCard onSaved={() => {}} />
+                    <VehicleSetupCard
+                        onSaved={refetchDriverProfile}
+                        onRefresh={refetchDriverProfile}
+                    />
                 )}
 
                 {activeRides.map((ride) => (

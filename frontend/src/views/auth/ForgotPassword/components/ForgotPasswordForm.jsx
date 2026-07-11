@@ -3,6 +3,7 @@ import Input from '@/components/ui/Input'
 import Button from '@/components/ui/Button'
 import { FormItem, Form } from '@/components/ui/Form'
 import { apiForgotPassword } from '@/services/AuthService'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -34,10 +35,7 @@ const ForgotPasswordForm = (props) => {
                 setEmailSent?.(true)
             }
         } catch (errors) {
-            setMessage?.(
-                errors?.response?.data?.detail ||
-                    (typeof errors === 'string' ? errors : 'Some error occured!'),
-            )
+            setMessage?.(getApiErrorMessage(errors, 'Some error occured!'))
             setSubmitting(false)
         }
 

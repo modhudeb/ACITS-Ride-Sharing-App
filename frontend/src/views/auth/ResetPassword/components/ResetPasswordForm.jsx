@@ -3,6 +3,7 @@ import Button from '@/components/ui/Button'
 import { FormItem, Form } from '@/components/ui/Form'
 import PasswordInput from '@/components/shared/PasswordInput'
 import { apiResetPassword } from '@/services/AuthService'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -55,10 +56,7 @@ const ResetPasswordForm = (props) => {
                 setResetComplete?.(true)
             }
         } catch (errors) {
-            setMessage?.(
-                errors?.response?.data?.detail ||
-                    (typeof errors === 'string' ? errors : 'Failed to reset password'),
-            )
+            setMessage?.(getApiErrorMessage(errors, 'Failed to reset password'))
             setSubmitting(false)
         }
 
