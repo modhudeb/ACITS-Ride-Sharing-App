@@ -19,7 +19,19 @@ import { DEFAULT_CENTER } from '@/constants/map.constant'
 const WELCOME = {
     role: 'assistant',
     content:
-        'Hi! Ask me to find any place - e.g. "nearest restaurant" or "where is Square company" - and I can start a ride there for you.',
+        'Hi! Ask me to find any place - e.g. "nearest restaurant" or "where is Square company" - or just tell me to book a ride somewhere and I\'ll start it for you.',
+}
+
+// The chat only displays msg.content, but the backend agent needs to see
+// what options it already showed to ground follow-ups like "book the
+// second one" in real coordinates instead of re-guessing them. This builds
+// the richer text sent as history without touching what's rendered.
+const toHistoryContent = (msg) => {
+    if (msg.role !== 'assistant' || !msg.places?.length) return msg.content
+    const options = msg.places
+        .map((p, i) => `${i + 1}. ${p.name} (${p.lat},${p.lng})`)
+        .join('; ')
+    return `${msg.content}\n[Options shown: ${options}]`
 }
 
 // Floating ride-search assistant: the model only ever parses intent, real
@@ -64,7 +76,7 @@ const ChatAssistant = () => {
 
         const history = messages
             .slice(-6)
-            .map((m) => ({ role: m.role, content: m.content }))
+            .map((m) => ({ role: m.role, content: toHistoryContent(m) }))
         setMessages((prev) => [...prev, { role: 'user', content: text }])
 
         try {
@@ -79,9 +91,14 @@ const ChatAssistant = () => {
                     role: 'assistant',
                     content: res.reply,
                     places: res.places,
-                    pickup: res.pickup,
                 },
             ])
+            // The agent itself decided to start a booking (not just list
+            // options) - hand off straight to the booking screen instead of
+            // waiting for a card tap.
+            if (res.booking) {
+                handleBookRideHere(res.booking.destination, res.booking.pickup)
+            }
         } catch (err) {
             setMessages((prev) => [
                 ...prev,
@@ -253,10 +270,7 @@ const ChatAssistant = () => {
                                                 className="!bg-emerald-600 hover:!bg-emerald-700"
                                                 icon={<TbCar size={16} />}
                                                 onClick={() =>
-                                                    handleBookRideHere(
-                                                        place,
-                                                        msg.pickup,
-                                                    )
+                                                    handleBookRideHere(place)
                                                 }
                                             >
                                                 Book ride here
