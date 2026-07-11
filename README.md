@@ -98,43 +98,29 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 
 > All images live in [`docs/screenshots/`](docs/screenshots/).
 
-### Passenger Experience
+### Passenger — booking and live tracking
 
-| Booking a ride | Fare estimate | Live driver tracking |
-|---|---|---|
-| ![Booking](docs/screenshots/passenger-booking.png) | ![Fare estimate](docs/screenshots/passenger-fare-estimate.png) | ![Live tracking](docs/screenshots/passenger-live-tracking.png) |
-
-| Destination search (OSM) | Pooled cargo booking | In-ride chat |
-|---|---|---|
-| ![Search](docs/screenshots/passenger-place-search.png) | ![Goods](docs/screenshots/passenger-goods-booking.png) | ![Chat](docs/screenshots/ride-chat.png) |
-
-### AI Ride Assistant
-
-| Assistant finds real places | One tap to book |
+| Booking a ride | Live driver tracking |
 |---|---|
-| ![Assistant search](docs/screenshots/assistant-search.png) | ![Assistant book](docs/screenshots/assistant-book-ride.png) |
+| ![Booking](docs/screenshots/passenger-booking.png) | ![Live tracking](docs/screenshots/passenger-live-tracking.png) |
 
-### Driver Experience
+### AI assistant and the driver's route preview
 
-| Incoming requests + route preview | Live route to pickup | Earnings |
-|---|---|---|
-| ![Driver requests](docs/screenshots/driver-requests.png) | ![Driver route](docs/screenshots/driver-live-route.png) | ![Earnings](docs/screenshots/driver-earnings.png) |
-
-### Admin Panel
-
-| Dashboard | Live Ops map | Pricing control |
-|---|---|---|
-| ![Admin dashboard](docs/screenshots/admin-dashboard.png) | ![Live ops](docs/screenshots/admin-live-ops.png) | ![Pricing](docs/screenshots/admin-pricing.png) |
-
-| Driver approval | Ride management |
+| AI assistant finds real places | Driver route preview before accepting |
 |---|---|
-| ![Driver approval](docs/screenshots/admin-driver-approval.png) | ![Ride management](docs/screenshots/admin-rides.png) |
+| ![Assistant search](docs/screenshots/assistant-search.png) | ![Driver route preview](docs/screenshots/driver-requests.png) |
 
-### Android App
+### Admin panel
 
-| Home (APK) | Booking on Android | GPS permission flow |
-|---|---|---|
-| ![Android home](docs/screenshots/android-home.png) | ![Android booking](docs/screenshots/android-booking.png) | ![Android GPS](docs/screenshots/android-gps-permission.png) |
+| Dashboard | Live Ops — every ride and driver, live |
+|---|---|
+| ![Admin dashboard](docs/screenshots/admin-dashboard.png) | ![Live ops](docs/screenshots/admin-live-ops.png) |
+
+### Android app
+
+<p align="center">
+  <img src="docs/screenshots/android-booking.png" alt="Booking a ride on Android" width="320" />
+</p>
 
 ---
 
@@ -190,31 +176,31 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 
 ## 🏗 System Architecture
 
-```
-                                   ┌──────────────────────────────────────────┐
-                                   │              AWS EC2 (Ubuntu)            │
-                                   │          Elastic IP + DuckDNS            │
-                                   │                                          │
-  Browser / Android App            │  ┌────────────────────────────────────┐  │
-  ┌──────────────────┐   HTTPS 443 │  │        Caddy (web container)       │  │
-  │  React SPA        ├────────────┼─►│  • serves built React app          │  │
-  │  (same code on    │            │  │  • auto Let's Encrypt certificates │  │
-  │  web + Capacitor) │  WSS       │  │  • proxies /api/* + WebSockets     │  │
-  └──────────────────┘             │  └───────────────┬────────────────────┘  │
-                                   │                  │ internal network      │
-                                   │  ┌───────────────▼────────────────────┐  │
-                                   │  │      FastAPI (backend container)   │  │
-                                   │  │  REST API • WebSocket hub • JWT    │  │
-                                   │  │  fare engine • surge • matching    │  │
-                                   │  └───────┬──────────────┬─────────────┘  │
-                                   └──────────┼──────────────┼────────────────┘
-                                              │              │
-                              ┌───────────────▼──┐    ┌──────▼───────────────────┐
-                              │  Neon PostgreSQL │    │  External geo services   │
-                              │  (cloud-hosted)  │    │  OSM/Photon • Overpass   │
-                              └──────────────────┘    │  Mapbox traffic routing  │
-                                                      │  Groq (assistant LLM)    │
-                                                      └──────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph clients["Clients"]
+        WEB["🌐 React SPA<br/>(web browser)"]
+        APK["📱 Android App<br/>(Capacitor — same codebase)"]
+    end
+
+    subgraph aws["☁️ AWS EC2 — Elastic IP + DuckDNS domain"]
+        CADDY["Caddy (web container)<br/>serves the built React app<br/>automatic Let's Encrypt HTTPS"]
+        API["FastAPI (backend container)<br/>REST API · WebSocket hub · JWT<br/>fare · surge · matching engines"]
+        CADDY -->|"proxies /api/* + WebSockets<br/>internal Docker network"| API
+    end
+
+    WEB -->|"HTTPS / WSS (443)"| CADDY
+    APK -->|"HTTPS / WSS (443)"| CADDY
+
+    DB[("Neon PostgreSQL<br/>(cloud-hosted)")]
+    GEO["🗺️ OSM Photon + Overpass<br/>place search"]
+    MAPBOX["🚦 Mapbox<br/>traffic-aware routing"]
+    LLM["🤖 Groq LLM<br/>assistant intent parsing"]
+
+    API --> DB
+    API --> GEO
+    API --> MAPBOX
+    API --> LLM
 ```
 
 **Design decisions worth noting:**
@@ -287,8 +273,6 @@ The project was built in deliberate phases, each one shipped and verified before
 
 > This section documents, step by step, exactly how the platform went from `localhost` to a public HTTPS product on AWS. The result: **the app runs 24/7 on the internet even when my own computer is off.**
 
-![Deployment diagram](docs/screenshots/aws-deployment-diagram.png)
-
 ### 1. Provisioning the EC2 instance
 
 - Launched an **Ubuntu EC2 instance** in `us-east-1`.
@@ -342,12 +326,14 @@ Certificates are stored on a **named Docker volume**, so container restarts neve
 
 The EC2 instance is a small, cheap machine (~1 GB RAM). The frontend's Vite build **out-of-memoried** the server every time. Rather than paying for a bigger instance, I inverted the workflow:
 
-```
-┌─────────────┐  docker compose build   ┌─────────────┐  docker compose pull  ┌────────────┐
-│ My PC       ├────────────────────────►│ Docker Hub  ├──────────────────────►│ AWS EC2    │
-│ (fast, big) │  docker compose push    │ (registry)  │  docker compose up -d │ (small,    │
-└─────────────┘                         └─────────────┘                       │  cheap)    │
-                                                                              └────────────┘
+```mermaid
+flowchart LR
+    PC["💻 My workstation<br/>(fast, plenty of RAM)"]
+    HUB[("🐳 Docker Hub<br/>image registry")]
+    EC2["☁️ AWS EC2<br/>(small, cheap)"]
+
+    PC -->|"docker compose build<br/>docker compose push"| HUB
+    HUB -->|"docker compose pull<br/>docker compose up -d"| EC2
 ```
 
 One `docker-compose.yml` declares **both** `build:` and `image:` for each service, so the exact same file drives both sides:
