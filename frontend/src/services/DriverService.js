@@ -39,6 +39,20 @@ export async function apiSetVehicleDetails({
     })
 }
 
+export async function apiGetDriverProfile(uid) {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.driverProfile(uid),
+        method: 'get',
+    })
+}
+
+export async function apiGetOnlineDriverLocations() {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.driverLocations,
+        method: 'get',
+    })
+}
+
 export async function apiGetDemandHeatmap() {
     return ApiService.fetchDataWithAxios({
         url: endpointConfig.driverHeatmap,

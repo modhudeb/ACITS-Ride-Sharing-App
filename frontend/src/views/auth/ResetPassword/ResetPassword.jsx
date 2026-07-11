@@ -13,7 +13,7 @@ export const ResetPasswordBase = ({ signInUrl = '/sign-in' }) => {
 
     const navigate = useNavigate()
     const [searchParams] = useSearchParams()
-    const oobCode = searchParams.get('oobCode')
+    const resetToken = searchParams.get('token')
 
     const handleContinue = () => {
         navigate(signInUrl)
@@ -47,7 +47,7 @@ export const ResetPasswordBase = ({ signInUrl = '/sign-in' }) => {
                 resetComplete={resetComplete}
                 setMessage={setMessage}
                 setResetComplete={setResetComplete}
-                oobCode={oobCode}
+                resetToken={resetToken}
             >
                 <Button
                     block

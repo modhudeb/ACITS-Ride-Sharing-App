@@ -1,13 +1,12 @@
-import { useRef, useImperativeHandle, useState, useEffect } from 'react'
+import { useRef, useImperativeHandle, useState } from 'react'
 import AuthContext from './AuthContext'
 import appConfig from '@/configs/app.config'
 import { useSessionUser, useToken } from '@/store/authStore'
 import { apiAdminSignIn, apiSignIn, apiSignOut, apiSignUp } from '@/services/AuthService'
 import { REDIRECT_URL_KEY } from '@/constants/app.constant'
 import { useNavigate } from 'react-router'
-import { onIdTokenChanged } from 'firebase/auth'
-import { doc, onSnapshot } from 'firebase/firestore'
-import { auth, db } from '@/services/firebase/firebaseApp'
+import { realtimeClient } from '@/services/realtime/RealtimeClient'
+import useRealtimeTopic from '@/utils/hooks/useRealtimeTopic'
 
 const IsolatedNavigator = ({ ref }) => {
     const navigate = useNavigate()
@@ -35,38 +34,21 @@ function AuthProvider({ children }) {
 
     const navigatorRef = useRef(null)
 
-    useEffect(() => {
-        const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
-            if (!firebaseUser || !signedIn) return
-            const freshToken = await firebaseUser.getIdToken()
-            setToken(freshToken)
-            setTokenState(freshToken)
-        })
-        return unsubscribe
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [signedIn])
-
     // Role/status (e.g. an admin approving a driver, or suspending an
-    // account) live in Firestore and only got baked into the persisted user
-    // object at sign-in time - without this, a refresh just replays the same
-    // stale localStorage snapshot forever. This keeps it live instead.
-    useEffect(() => {
-        if (!authenticated || !user.uid) return
-
-        const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
-            if (!snapshot.exists()) return
-            const profile = snapshot.data()
+    // account) only got baked into the persisted user object at sign-in
+    // time - without this, a refresh just replays the same stale
+    // localStorage snapshot forever. This keeps it live instead.
+    useRealtimeTopic(
+        authenticated && user.uid ? `user:${user.uid}` : null,
+        (message) => {
+            if (message.type !== 'state') return
             setUser({
-                userName: profile.name || '',
-                avatar: profile.photoUrl || '',
-                authority: profile.role ? [profile.role] : [],
-                status: profile.status || 'active',
+                userName: message.data.name || '',
+                authority: message.data.role ? [message.data.role] : [],
+                status: message.data.status || 'active',
             })
-        })
-
-        return unsubscribe
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [authenticated, user.uid])
+        },
+    )
 
     const redirect = () => {
         const search = window.location.search
@@ -92,6 +74,7 @@ function AuthProvider({ children }) {
         setToken('')
         setUser({})
         setSessionSignedIn(false)
+        realtimeClient.close()
     }
 
     const signIn = async (values) => {

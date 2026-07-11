@@ -1,54 +1,30 @@
-import { useEffect, useState } from 'react'
-import { doc, onSnapshot } from 'firebase/firestore'
-import { db } from '@/services/firebase/firebaseApp'
+import { useCallback, useEffect, useState } from 'react'
+import useRealtimeTopic from './useRealtimeTopic'
+import { apiGetRide } from '@/services/RideService'
 
-export function normalizeRideDoc(id, data) {
-    return {
-        id,
-        passenger_id: data.passengerId,
-        passenger_name: data.passengerName,
-        driver_id: data.driverId,
-        driver_name: data.driverName,
-        status: data.status,
-        pickup: data.pickup,
-        destination: data.destination,
-        distance_meters: data.distanceMeters,
-        duration_seconds: data.durationSeconds,
-        route_path: data.routePath,
-        fare_estimate: data.fareEstimate,
-        fare_breakdown: data.fareBreakdown,
-        goods: data.goods || { weight_kg: 0, volume_m3: 0 },
-        share_token: data.shareToken,
-        scheduled_at: data.scheduledAt?.toDate
-            ? data.scheduledAt.toDate().toISOString()
-            : data.scheduledAt || null,
-        rated_by_passenger: Boolean(data.ratedByPassenger),
-        rated_by_driver: Boolean(data.ratedByDriver),
-        final_fare: data.finalFare,
-        cancellation_fee: data.cancellationFee,
-        cancel_reason: data.cancelReason,
-    }
-}
-
+// Fetches the current ride once, then stays live via the ride:{id} realtime
+// topic (full-state pushes on every status change) - the REST+WS equivalent
+// of the old Firestore onSnapshot(doc(db,'rides',rideId)).
 const useRideListener = (rideId) => {
     const [ride, setRide] = useState(null)
 
-    useEffect(() => {
+    const refetch = useCallback(() => {
         if (!rideId) {
             setRide(null)
             return
         }
-
-        const unsubscribe = onSnapshot(doc(db, 'rides', rideId), (snapshot) => {
-            setRide(
-                snapshot.exists()
-                    ? normalizeRideDoc(snapshot.id, snapshot.data())
-                    : null,
-            )
-        })
-
-        return unsubscribe
+        apiGetRide(rideId)
+            .then(setRide)
+            .catch(() => setRide(null))
     }, [rideId])
+
+    useEffect(() => {
+        refetch()
+    }, [refetch])
+
+    useRealtimeTopic(rideId ? `ride:${rideId}` : null, (message) => {
+        if (message.type === 'state') setRide(message.data)
+    })
 
     return ride
 }

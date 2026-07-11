@@ -55,6 +55,13 @@ export async function apiGetAdminRides(params) {
     })
 }
 
+export async function apiGetActiveAdminRides() {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.adminActiveRides,
+        method: 'get',
+    })
+}
+
 export async function apiGetDashboardStats() {
     return ApiService.fetchDataWithAxios({
         url: endpointConfig.adminDashboardStats,

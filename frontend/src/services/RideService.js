@@ -100,3 +100,35 @@ export async function apiGetRideHistory() {
         method: 'get',
     })
 }
+
+// Backs the "do I have an active ride" hooks - refetched whenever their
+// rides:{uid} realtime topic signals a change.
+export async function apiGetActiveRides() {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.ridesActive,
+        method: 'get',
+    })
+}
+
+// A driver's live pending-request feed - refetched on the driver_feed signal.
+export async function apiGetPendingRequests() {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.ridesPending,
+        method: 'get',
+    })
+}
+
+export async function apiGetRideMessages(rideId) {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.rideMessages(rideId),
+        method: 'get',
+    })
+}
+
+export async function apiSendRideMessage(rideId, text) {
+    return ApiService.fetchDataWithAxios({
+        url: endpointConfig.rideMessages(rideId),
+        method: 'post',
+        data: { text },
+    })
+}

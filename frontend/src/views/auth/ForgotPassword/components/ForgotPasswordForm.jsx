@@ -35,7 +35,8 @@ const ForgotPasswordForm = (props) => {
             }
         } catch (errors) {
             setMessage?.(
-                typeof errors === 'string' ? errors : 'Some error occured!',
+                errors?.response?.data?.detail ||
+                    (typeof errors === 'string' ? errors : 'Some error occured!'),
             )
             setSubmitting(false)
         }

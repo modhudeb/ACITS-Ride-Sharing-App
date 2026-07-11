@@ -25,7 +25,7 @@ const ResetPasswordForm = (props) => {
         setMessage,
         setResetComplete,
         resetComplete,
-        oobCode,
+        resetToken,
         children,
     } = props
 
@@ -40,7 +40,7 @@ const ResetPasswordForm = (props) => {
     const onResetPassword = async (values) => {
         const { newPassword } = values
 
-        if (!oobCode) {
+        if (!resetToken) {
             setMessage?.('This password reset link is invalid or has expired')
             return
         }
@@ -48,7 +48,7 @@ const ResetPasswordForm = (props) => {
         try {
             const resp = await apiResetPassword({
                 password: newPassword,
-                oobCode,
+                token: resetToken,
             })
             if (resp) {
                 setSubmitting(false)
@@ -56,9 +56,8 @@ const ResetPasswordForm = (props) => {
             }
         } catch (errors) {
             setMessage?.(
-                typeof errors === 'string'
-                    ? errors
-                    : 'Failed to reset password',
+                errors?.response?.data?.detail ||
+                    (typeof errors === 'string' ? errors : 'Failed to reset password'),
             )
             setSubmitting(false)
         }

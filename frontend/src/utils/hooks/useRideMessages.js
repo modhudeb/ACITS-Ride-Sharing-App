@@ -1,37 +1,29 @@
-import { useEffect, useState } from 'react'
-import {
-    collection,
-    onSnapshot,
-    orderBy,
-    query,
-} from 'firebase/firestore'
-import { db } from '@/services/firebase/firebaseApp'
+import { useCallback, useEffect, useState } from 'react'
+import useRealtimeTopic from './useRealtimeTopic'
+import { apiGetRideMessages } from '@/services/RideService'
 
 const useRideMessages = (rideId) => {
     const [messages, setMessages] = useState([])
 
-    useEffect(() => {
+    const refetch = useCallback(() => {
         if (!rideId) {
             setMessages([])
             return
         }
-
-        const q = query(
-            collection(db, 'rides', rideId, 'messages'),
-            orderBy('at', 'asc'),
-        )
-
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            setMessages(
-                snapshot.docs.map((docSnap) => ({
-                    id: docSnap.id,
-                    ...docSnap.data(),
-                })),
-            )
-        })
-
-        return unsubscribe
+        apiGetRideMessages(rideId)
+            .then(setMessages)
+            .catch(() => setMessages([]))
     }, [rideId])
+
+    useEffect(() => {
+        refetch()
+    }, [refetch])
+
+    useRealtimeTopic(rideId ? `ride_chat:${rideId}` : null, (message) => {
+        if (message.type === 'message') {
+            setMessages((prev) => [...prev, message.data])
+        }
+    })
 
     return messages
 }

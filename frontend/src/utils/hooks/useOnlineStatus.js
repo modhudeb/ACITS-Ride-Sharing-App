@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 // navigator.onLine only reflects the network interface, not real connectivity
 // to our servers, but it reliably catches the common case (wifi/data dropped)
 // and needs zero extra network calls - good enough to warn a rider mid-trip
-// that Firestore's live updates may be stale.
+// that the realtime WebSocket connection may be stale.
 const useOnlineStatus = () => {
     const [online, setOnline] = useState(navigator.onLine)
 
