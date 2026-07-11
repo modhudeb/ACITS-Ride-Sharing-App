@@ -5,7 +5,11 @@ from app.models.ride import LatLng
 
 class ChatMessage(BaseModel):
     role: str
-    content: str = Field(max_length=1000)
+    # Raised from 1000: the frontend now folds serialized place options
+    # ("Options shown: 1. X (lat,lng); ...") into assistant history entries
+    # so multi-turn references like "book the second one" stay grounded in
+    # real coordinates instead of the model re-guessing them.
+    content: str = Field(max_length=2000)
 
 
 class AssistantChatRequest(BaseModel):
@@ -24,11 +28,20 @@ class PlaceResult(BaseModel):
     distance_km: float
 
 
+class AssistantBooking(BaseModel):
+    """Emitted only when the agent decided to actually start a booking (via
+    the start_booking tool), as opposed to just listing search results. The
+    frontend hands this straight to the booking screen with no extra click
+    required - the whole point of the agent being able to act, not just
+    search."""
+
+    destination: PlaceResult
+    # Explicit alternate origin (e.g. "from Gulshan to Banani"). Absent means
+    # the app falls back to the passenger's live GPS location as pickup.
+    pickup: PlaceResult | None = None
+
+
 class AssistantChatResponse(BaseModel):
     reply: str
     places: list[PlaceResult] = Field(default_factory=list)
-    # When the passenger named an explicit origin (e.g. "from Gulshan to
-    # Banani"), this is that resolved start point. When they said "my
-    # place"/"here", pickup_query is null and the app falls back to
-    # their live GPS location instead.
-    pickup: PlaceResult | None = None
+    booking: AssistantBooking | None = None
