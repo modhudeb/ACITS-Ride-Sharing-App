@@ -5,7 +5,7 @@ const Blank = ({ children }) => {
     return (
         <LayoutBase
             type={LAYOUT_BLANK}
-            className="app-layout-blank flex flex-auto flex-col h-[100vh]"
+            className="app-layout-blank flex flex-auto flex-col h-[100dvh]"
         >
             <div className="flex min-w-0 w-full flex-1">{children}</div>
         </LayoutBase>

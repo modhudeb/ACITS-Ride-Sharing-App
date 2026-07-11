@@ -16,7 +16,7 @@ const Layout = ({ children }) => {
     return (
         <Suspense
             fallback={
-                <div className="flex flex-auto flex-col h-[100vh]">
+                <div className="flex flex-auto flex-col h-[100dvh]">
                     <Loading loading={true} />
                 </div>
             }

@@ -75,7 +75,7 @@ const FrameLessSide = ({ children }) => {
                     <SideNav
                         background={false}
                         className={classNames('contrast-dark pt-6')}
-                        contentClass="h-[calc(100vh-8rem)]"
+                        contentClass="h-[calc(100dvh-8rem)]"
                         mode="dark"
                     />
                 )}

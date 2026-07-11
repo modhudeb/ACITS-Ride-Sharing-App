@@ -95,7 +95,7 @@ const ChatAssistant = () => {
                 type="button"
                 aria-label="Open ride assistant"
                 onClick={() => setOpen(true)}
-                className="fixed bottom-5 right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-white p-2.5 text-white shadow-lg ring-2 ring-emerald-600/20 transition-transform hover:scale-105"
+                className="fixed fab-safe z-20 flex h-14 w-14 items-center justify-center rounded-full bg-white p-2.5 text-white shadow-lg ring-2 ring-emerald-600/20 transition-transform hover:scale-105"
             >
                 <img
                     src="/img/logo/logo-light-streamline.png"
@@ -107,7 +107,7 @@ const ChatAssistant = () => {
     }
 
     return (
-        <div className="fixed bottom-5 right-5 z-20 flex h-[28rem] max-h-[calc(100vh-6rem)] w-[22rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-xl border border-emerald-600/30 bg-white shadow-2xl dark:bg-gray-800">
+        <div className="fixed fab-safe z-20 flex h-[28rem] max-h-[calc(100dvh-6rem)] w-[22rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-xl border border-emerald-600/30 bg-white shadow-2xl dark:bg-gray-800">
             <div className="flex items-center justify-between bg-emerald-600 px-3 py-2.5 text-white">
                 <span className="flex items-center gap-1.5 text-sm font-semibold">
                     <TbSparkles size={18} /> Ride assistant

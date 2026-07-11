@@ -366,7 +366,7 @@ const BookRide = () => {
                 )}
             </Map>
 
-            <div className="absolute top-4 left-4 right-4 sm:right-auto sm:w-96 flex flex-col gap-3 max-h-[calc(100%-2rem)] overflow-auto">
+            <div className="absolute bottom-safe-panel top-4 left-4 right-4 sm:right-auto sm:w-96 flex flex-col gap-3 overflow-auto">
                 {!rideActive && (
                     <Card>
                         <div className="mb-3">

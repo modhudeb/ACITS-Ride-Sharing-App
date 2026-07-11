@@ -20,7 +20,7 @@ const Centered = ({ children, ...rest }) => {
                         {APP_TAGLINE}
                     </p>
                 </div>
-                <div className="rounded-2xl bg-white p-8 shadow-xl shadow-emerald-900/10 ring-1 ring-emerald-900/5">
+                <div className="rounded-2xl bg-white p-6 sm:p-8 shadow-xl shadow-emerald-900/10 ring-1 ring-emerald-900/5">
                     {children
                         ? cloneElement(children, {
                               ...rest,

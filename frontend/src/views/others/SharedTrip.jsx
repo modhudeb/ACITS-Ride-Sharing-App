@@ -93,7 +93,7 @@ const SharedTrip = () => {
         : null
 
     return (
-        <div className="relative h-screen w-screen">
+        <div className="relative h-[100dvh] w-full">
             {viewState && (
                 <Map
                     {...viewState}

@@ -58,7 +58,6 @@ const OtpVerificationForm = (props) => {
                         render={({ field }) => (
                             <OtpInput
                                 placeholder=""
-                                inputClass="h-[58px]"
                                 length={OTP_LENGTH}
                                 {...field}
                             />

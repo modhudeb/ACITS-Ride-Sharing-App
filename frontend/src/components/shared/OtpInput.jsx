@@ -75,7 +75,7 @@ const OTPInput = ({
     }
 
     return (
-        <div className={`flex gap-2 ${className}`}>
+        <div className={`flex gap-2 w-full ${className}`}>
             {Array(length)
                 .fill(null)
                 .map((_, index) => (
@@ -83,7 +83,7 @@ const OTPInput = ({
                         key={index}
                         ref={setRef(index)}
                         className={classNames(
-                            'text-center text-lg h-[58px] w-[58px]',
+                            'text-center text-base sm:text-lg h-12 sm:h-14 flex-1 min-w-0',
                             inputClass,
                         )}
                         type="text"

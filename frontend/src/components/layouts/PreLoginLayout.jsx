@@ -10,7 +10,7 @@ const PreLoginLayout = ({ children }) => {
     const isAuthPath = authRoute.some((route) => route.path === pathname)
 
     return (
-        <div className="flex flex-auto flex-col h-[100vh]">
+        <div className="flex flex-auto flex-col h-[100dvh]">
             {isAuthPath ? <AuthLayout>{children}</AuthLayout> : children}
         </div>
     )
