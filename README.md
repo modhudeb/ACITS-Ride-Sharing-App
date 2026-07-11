@@ -25,6 +25,7 @@
 ## 📌 Table of Contents
 
 - [Key Functionality](#-key-functionality)
+- [How Key Components Work](#-how-key-components-work)
 - [Live Demo](#-live-demo)
 - [Screenshots](#-screenshots)
 - [Tech Stack](#-tech-stack)
@@ -52,7 +53,7 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 - **Schedule rides for later** — book now, ride at a chosen future time.
 - **Live driver tracking** — watch your driver approach in real time over WebSockets, with a traffic-aware ETA.
 - **In-ride chat** — message your driver directly inside the app.
-- **AI ride assistant** — a floating chat assistant ("find the nearest pharmacy", "where is Khwaja Yunus Ali Medical College") that finds real places and starts the booking for you with one tap. The assistant panel is draggable, minimizable, and expandable.
+- **AI ride assistant** — a floating chat assistant that finds real places ("find the nearest pharmacy"), quotes a real fare ("how much to Gulshan?"), and can book the ride itself when you ask it to ("book a ride to Khwaja Yunus Ali University"). The assistant panel is draggable, minimizable, and expandable.
 - **Ratings & history** — rate every ride and browse your full ride history.
 - **Ride sharing link** — share a live ride status link with family so they can follow the trip.
 
@@ -78,6 +79,95 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 - **JWT authentication** with role-based access control, password reset over email, and rate limiting on sensitive endpoints.
 - **Single WebSocket channel** carrying every realtime topic (ride status, driver location, chat, admin live ops) with per-topic authorization.
 - **Fully containerized** — one `docker compose up -d` starts the entire production stack.
+
+---
+
+## 🔬 How Key Components Work
+
+This section explains, in plain terms, how the platform actually does its core jobs — not just what it does. These are the parts that separate a real ride-hailing engine from a UI mockup.
+
+### 🗺️ Route mapping & ETA
+
+Every route (for a fare estimate, for a driver's live navigation line, for the "driver is 4 minutes away" ETA) goes through one function: `maps_service.compute_route(origin, destination)`. It calls **Mapbox's Directions API** with the `driving-traffic` profile — the one that factors in live road congestion, not just distance. Mapbox returns three things, and the app uses all three:
+
+- `distance_meters` and `duration_seconds` — the numbers the fare formula runs on.
+- `route_path` — the actual road-following line (not a straight line between two points), which is what draws the blue line on the passenger's map and the teal line on the driver's map.
+
+The same function backs two different screens: `POST /routes/estimate` (used before booking, adds fare on top) and `POST /routes/eta` (used continuously during a live ride, no fare — just distance/time/path). This is deliberate — a passenger deciding whether to book needs a price, but a driver's live tracking line just needs to stay current, so the two are kept as separate lightweight calls instead of one bloated endpoint.
+
+**Why the route is never computed on the client:** if the browser calculated distance itself (e.g. straight-line haversine), a rider could fake a shorter distance to pay less, or the number wouldn't match real roads at all. The server is the only thing that ever talks to Mapbox, so the distance a rider is charged for is the same distance Mapbox says the car will actually drive.
+
+### 💰 Fare calculation
+
+Fare is built in `fare_service.calculate_fare()` from simple, stacked pieces — the same shape real ride-hailing apps use:
+
+```
+metered = (base_fare + distance_km × per_km_rate + duration_min × per_min_rate)
+          × peak_hour_multiplier
+          × night_multiplier
+          × surge_multiplier
+
+metered = metered × (1 − pool_discount_pct)     # pooled-truck rides get a discount
+
+goods_surcharge = weight_kg × per_kg_rate + volume_m3 × per_m3_rate   # never surged
+
+fare = max(metered + goods_surcharge, minimum_fare) + booking_fee
+```
+
+A few choices worth calling out:
+
+- **The booking fee is added last and is never multiplied by anything** — surge or peak pricing shouldn't inflate a flat platform fee, only the metered ride cost.
+- **Goods handling charges are never surged** — surge reflects passenger demand for rides, not cargo weight, so it stays a flat rate regardless of how busy the zone is.
+- **Peak-hour and night windows are evaluated in Asia/Dhaka time**, not server time — the server itself usually runs on UTC (that's how most cloud hosts are set up), so "is it currently peak hour" has to convert first or it would trigger multipliers at the wrong local time.
+- **Every rate lives in the database, not in code.** An admin editing the pricing panel changes the actual numbers `calculate_fare()` reads — no redeploy needed. A short in-process cache (60 seconds) avoids hitting the database on every single fare estimate, since prices change rarely but get read constantly.
+
+### 📈 Surge pricing
+
+Surge is a **live multiplier**, not a fixed table — it reads real signals from the database and blends four of them, each one capped individually so no single input can send the price flying on its own:
+
+```
+surge = 1.0
+      + 0.25 × excess pressure     (pending ride requests ÷ online drivers, right now, in this ~5km zone)
+      + 0.10 × excess momentum     (rides requested in the last 15 min vs the 15 min before that)
+      + 0.10 × excess vs baseline  (last 30 min vs this same zone's average at this exact time of day, over the past 4 weeks)
+      + 0.15 × rain saturation     (live rainfall in the zone, from the free Open-Meteo API)
+      → clamped to the admin-configured cap, rounded to the nearest 0.05
+```
+
+How each piece is measured:
+
+| Signal | What it looks at | Why it matters |
+|---|---|---|
+| **Pressure** | Pending ride requests vs. online drivers with a GPS heartbeat less than 2 minutes old, inside the pickup's zone | The classic supply/demand ratio — this is the dominant signal, and it alone can push surge all the way to the cap |
+| **Momentum** | Rides requested in the last 15 minutes vs. the 15 minutes before | Catches a demand spike a few minutes *before* it fully shows up as a wall of pending requests |
+| **Baseline** | The last 30 minutes vs. this zone's own historical average at this same clock time, averaged over the past 4 weeks | Tells the difference between "busy for this zone right now" and "just a normally busy area" — a zone with almost no ride history yet skips this signal automatically instead of guessing |
+| **Rain** | Live precipitation at the zone's coordinates | Rain reliably pushes demand up and driver willingness down — a real, well-known effect in ride-hailing, and Bangladesh gets heavy monsoon rain |
+
+**"Zone" is a geohash cell** roughly 5km × 5km — every driver and every ride request gets encoded to a geohash, and a simple prefix range query finds everything in the same cell without needing a geospatial database extension.
+
+Every one of the four signals **fails soft**: if the weather API is down, rain contributes zero instead of erroring; if a zone has too little ride history to trust, the baseline signal skips itself instead of guessing. The admin's configured cap always wins no matter what the four signals add up to, and surge can be switched off platform-wide from the pricing panel in one toggle.
+
+### 🚚 Driver matching & pooled cargo
+
+There's no central dispatcher deciding who gets which ride — the platform uses **broadcast matching**: when a ride is requested, it's written as a `ride_requests` row tagged with a geohash. Every online driver within range is independently listening for requests in their own zone, and whichever driver taps **Accept** first gets the ride — the same first-come model real ride-hailing apps use, because it stays instant and never needs a matching algorithm to run centrally.
+
+For pooled truck rides, `capacity_service` keeps a live ledger of what a driver's vehicle already has committed (passengers on board, kg and m³ already loaded) before letting them accept one more. This is pure, dependency-free logic — no database calls inside it — specifically so it can be tested exhaustively: it's mathematically impossible for a truck to accept more weight or volume than its stated capacity, because every accept re-checks the real running total, not a cached guess.
+
+### 🤖 AI ride assistant
+
+The assistant is a **tool-calling agent**, not a script that pattern-matches sentences. Groq (running `llama-4-scout-17b-16e-instruct`) is given four real tools — `search_places`, `reverse_geocode_passenger`, `estimate_fare`, `start_booking` — and decides for itself which ones to call and in what order, based on what the passenger actually asked.
+
+The model is never allowed to just *answer* with a place name or a coordinate from its own memory — every fact it states has to come from a tool result first. That one rule is what stops it from ever inventing an address that doesn't exist. A typical multi-step exchange:
+
+```
+"book a ride to the nearest university"
+  → agent calls search_places("university")
+  → gets back real OSM results, sorted by real distance
+  → agent calls start_booking with the nearest one's real coordinates
+  → app hands off straight to the booking screen — no extra tap needed
+```
+
+The loop is capped at 4 tool-call rounds so a confused generation can't spin forever, and if the AI provider itself rejects a malformed generation mid-conversation (a known rough edge of LLM tool-calling), the app falls back to whatever real results the tools already found that turn instead of showing an error.
 
 ---
 
@@ -160,7 +250,7 @@ The platform serves **three roles** — Passenger, Driver, and Administrator —
 ### AI
 | Technology | Role |
 |---|---|
-| **Groq (Llama 3.3 70B)** | Intent parsing for the ride assistant — the model only parses what the user wants; **real coordinates always come from real geocoders**, so it can never invent an address |
+| **Groq (Llama 4 Scout, tool-calling agent)** | Powers the ride assistant with real tools (place search, reverse geocoding, fare estimate, booking) that it calls itself; the model never answers from memory, only from tool results, so it can never invent an address |
 
 ### Infrastructure & DevOps
 | Technology | Role |
@@ -195,7 +285,7 @@ flowchart TB
     DB[("Neon PostgreSQL<br/>(cloud-hosted)")]
     GEO["🗺️ OSM Photon + Overpass<br/>place search"]
     MAPBOX["🚦 Mapbox<br/>traffic-aware routing"]
-    LLM["🤖 Groq LLM<br/>assistant intent parsing"]
+    LLM["🤖 Groq LLM<br/>tool-calling assistant agent"]
 
     API --> DB
     API --> GEO
@@ -266,6 +356,11 @@ The project was built in deliberate phases, each one shipped and verified before
 - Draggable / minimizable / expandable map panels sized for real phone screens.
 - Profile cards for all three roles wired to live database stats.
 - Test suite covering fares, capacity, geohash, auth, rate limits, realtime, and the full ride lifecycle.
+
+### Phase 11 — Multi-Factor Surge & the AI Agent Rebuild
+- Rebuilt surge pricing from a single demand/supply ratio into a 4-signal blend (pressure, momentum, historical baseline, live rainfall), each capped and fail-soft.
+- Rebuilt the AI assistant from a one-shot intent parser into a real **tool-calling agent** — it can search, quote a fare, and book a ride itself across multiple turns, grounded entirely in real tool results.
+- Fixed a class of place-search gaps found through real use: OSM queries were missing polygon-mapped places (university campuses, hospital grounds), dozens of everyday Bangladesh categories (mosque, market, coaching center, wedding hall) weren't recognized, and natural-language phrasing ("nearest university", "universities near me") wasn't normalized to the right category.
 
 ---
 
@@ -419,7 +514,7 @@ All endpoints live under `/api/v1`. A sample of the surface:
 | **Rides** | `POST /rides` · `GET /rides/active` · `GET /rides/history` · `POST /rides/{id}/accept` · `/start` · `/complete` · `/cancel` · `/rate` · ride chat messages |
 | **Routing** | `POST /routes/estimate` (fare + route) · `POST /routes/eta` (traffic-aware ETA + path) |
 | **Drivers** | `POST /drivers/status` · `POST /drivers/location` · `GET /drivers/heatmap` · `GET /drivers/earnings` · `POST /drivers/vehicle` |
-| **Assistant** | `POST /assistant/chat` (AI place search, Bangladesh-restricted) |
+| **Assistant** | `POST /assistant/chat` (tool-calling AI agent — search, fare estimate, and booking, Bangladesh-restricted) |
 | **Users** | `GET /users/me` (role-aware profile with live ride stats) |
 | **Admin** | login · drivers approval · passengers · rides · live rides · `GET/PUT /admin/pricing` · dashboard stats |
 | **Realtime** | `WS /ws` — one authenticated socket for ride status, locations, chat, live ops |
