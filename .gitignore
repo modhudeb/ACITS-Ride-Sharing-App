@@ -1,0 +1,46 @@
+# Root-level catch-all - backend/ and frontend/ each keep their own
+# more specific .gitignore; this covers anything that can appear at the
+# repo root or in either subtree regardless of tooling.
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+serviceAccountKey.json
+
+# Dependencies / build output
+node_modules/
+dist/
+dist-ssr/
+build/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Claude Code local settings
+.claude/settings.local.json
