@@ -228,7 +228,7 @@ const ActiveRideCard = ({
                 <RideChat
                     rideId={ride.id}
                     currentUid={user.uid}
-                    currentName={user.userName}
+                    peerName={ride.passenger_name}
                 />
             </div>
             <div className="flex flex-col gap-2">
@@ -618,7 +618,8 @@ const DriverHome = () => {
                 )}
             </Map>
 
-            <div className="absolute top-4 left-4 right-4 sm:right-auto sm:w-96 flex flex-col gap-3 bottom-safe-panel overflow-auto">
+            <div className="absolute bottom-safe-panel left-4 right-4 pb-16 sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 flex flex-col gap-3 max-h-[78dvh] sm:max-h-[calc(100dvh-7rem)] overflow-auto">
+                <div className="mx-auto mb-1 h-1.5 w-10 shrink-0 rounded-full bg-gray-300 dark:bg-gray-600 sm:hidden" />
                 <Card>
                     <div className="flex items-center justify-between">
                         <div>

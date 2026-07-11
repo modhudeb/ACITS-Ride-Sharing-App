@@ -17,7 +17,7 @@ const ContentOverlay = ({ children }) => {
     return (
         <LayoutBase
             type={LAYOUT_CONTENT_OVERLAY}
-            className="app-layout-content-overlay flex flex-auto flex-col min-h-screen"
+            className="app-layout-content-overlay flex flex-auto flex-col min-h-dvh"
             pageContainerReassemble={({
                 children,
                 defaultClass,
@@ -86,7 +86,7 @@ const ContentOverlay = ({ children }) => {
             )}
         >
             <div className="flex flex-auto min-w-0">
-                <div className="flex flex-col flex-auto min-h-screen min-w-0 relative w-full">
+                <div className="flex flex-col flex-auto min-h-dvh min-w-0 relative w-full">
                     <Header
                         container
                         className={classNames(

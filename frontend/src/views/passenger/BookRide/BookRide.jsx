@@ -366,7 +366,8 @@ const BookRide = () => {
                 )}
             </Map>
 
-            <div className="absolute bottom-safe-panel top-4 left-4 right-4 sm:right-auto sm:w-96 flex flex-col gap-3 overflow-auto">
+            <div className="absolute bottom-safe-panel left-4 right-4 pb-16 sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 flex flex-col gap-3 max-h-[70dvh] sm:max-h-[calc(100dvh-7rem)] overflow-auto">
+                <div className="mx-auto mb-1 h-1.5 w-10 shrink-0 rounded-full bg-gray-300 dark:bg-gray-600 sm:hidden" />
                 {!rideActive && (
                     <Card>
                         <div className="mb-3">
@@ -809,7 +810,7 @@ const BookRide = () => {
                             <RideChat
                                 rideId={ride.id}
                                 currentUid={user.uid}
-                                currentName={user.userName}
+                                peerName={ride.driver_name}
                             />
                         </div>
                         <Button block className="mb-2" onClick={handleShareTrip}>
@@ -857,7 +858,7 @@ const BookRide = () => {
                             <RideChat
                                 rideId={ride.id}
                                 currentUid={user.uid}
-                                currentName={user.userName}
+                                peerName={ride.driver_name}
                             />
                         </div>
                         <Button block onClick={handleShareTrip}>

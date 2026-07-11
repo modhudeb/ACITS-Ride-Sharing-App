@@ -6,6 +6,7 @@ import { DIR_RTL } from '@/constants/theme.constant'
 import withHeaderItem from '@/utils/hoc/withHeaderItem'
 import navigationConfig from '@/configs/navigation.config'
 import appConfig from '@/configs/app.config'
+import { APP_NAME } from '@/constants/app.constant'
 import { useThemeStore } from '@/store/themeStore'
 import { useRouteKeyStore } from '@/store/routeKeyStore'
 import { useSessionUser } from '@/store/authStore'
@@ -31,6 +32,7 @@ const MobileNav = ({ translationSetup = appConfig.activeNavTranslation }) => {
     const currentRouteKey = useRouteKeyStore((state) => state.currentRouteKey)
 
     const userAuthority = useSessionUser((state) => state.user.authority)
+    const sessionUser = useSessionUser((state) => state.user)
 
     return (
         <>
@@ -38,9 +40,25 @@ const MobileNav = ({ translationSetup = appConfig.activeNavTranslation }) => {
                 <MobileNavToggle toggled={isOpen} />
             </div>
             <Drawer
-                title="Navigation"
+                title={
+                    <div className="flex min-w-0 items-center gap-2">
+                        <img
+                            src="/img/logo/logo-light-streamline.png"
+                            alt={APP_NAME}
+                            className="h-6 w-6 shrink-0 rounded"
+                        />
+                        <div className="min-w-0">
+                            <p className="heading-text truncate text-sm font-bold leading-tight">
+                                {APP_NAME}
+                            </p>
+                            <p className="truncate text-xs text-gray-400">
+                                {sessionUser?.email}
+                            </p>
+                        </div>
+                    </div>
+                }
                 isOpen={isOpen}
-                bodyClass={classNames('p-0')}
+                bodyClass={classNames('p-0', 'safe-y')}
                 width={330}
                 placement={direction === DIR_RTL ? 'right' : 'left'}
                 onClose={handleDrawerClose}
