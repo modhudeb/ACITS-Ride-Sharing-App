@@ -15,22 +15,20 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 CATEGORY_SEARCH_URL = "https://api.mapbox.com/search/searchbox/v1/category/{category}"
 FORWARD_SEARCH_URL = "https://api.mapbox.com/search/searchbox/v1/forward"
 
-# Mapbox's proximity param is a soft bias, not a hard filter - a forward name
-# search for something like "Square" will happily return a match on the other
-# side of the planet if the local match density is thin. A bbox keeps the API
-# itself focused on the metro area, and the post-fetch distance cutoff below
-# is the actual "nearby or don't show it" guarantee.
-SEARCH_BBOX_DEGREES = 1.5
-MAX_RESULT_DISTANCE_KM = 50
+# Results are deliberately unrestricted by distance: proximity is passed to
+# Mapbox only as a ranking bias so nearer matches sort first, but a match
+# anywhere is still returned - the user picks from the list, so showing a
+# far-away result is strictly better than pretending it doesn't exist.
+RESULT_LIMIT = 10
 OVERPASS_RADIUS_METERS = 12000
 
 # Mapbox's commercial POI dataset (dataplor) has thin coverage in Bangladesh -
 # the nearest "restaurant" it knows about near central Dhaka is ~80km away,
 # in India. OpenStreetMap's community-mapped data is far denser here, so
-# category lookups go to Overpass first and only fall back to Mapbox if it's
-# unreachable. Named-business search (e.g. "Square company") stays on Mapbox
-# since Overpass free-text name search is too slow for a chat response
-# (single-instance regex scan can take 20-30s).
+# category lookups go to Overpass first and fall back to Mapbox when it's
+# unreachable or has no local matches. Named-business search (e.g. "Square
+# company") stays on Mapbox since Overpass free-text name search is too slow
+# for a chat response (single-instance regex scan can take 20-30s).
 CATEGORY_TO_OSM_TAG = {
     "restaurant": ("amenity", "restaurant"),
     "cafe": ("amenity", "cafe"),
@@ -58,7 +56,7 @@ KNOWN_CATEGORIES = set(CATEGORY_TO_OSM_TAG)
 # itself, since it would happily invent addresses that don't exist. Real
 # coordinates always come from Mapbox's Search Box API in resolve_places().
 SYSTEM_PROMPT = """You are the ride-hailing app's chat assistant. The user may:
-- ask to find a nearby place (e.g. "nearest restaurant", "where is Square company", "any pharmacy around")
+- ask to find a place, nearby or anywhere (e.g. "nearest restaurant", "where is Square company", "any pharmacy around")
 - just chat about their trip
 
 Respond with ONLY a JSON object, no other text, in this exact shape:
@@ -68,7 +66,7 @@ If intent is "place_search" and the user is asking for a KIND of place, set
 search_query to one of these exact category ids: """ + ", ".join(sorted(KNOWN_CATEGORIES)) + """.
 If the user is asking for a specific named place or business (e.g. "Square company",
 "KFC Gulshan"), set search_query to that name as written instead.
-Keep "reply" short; if it's a place_search, say you're looking, e.g. "Here's what I found nearby:".
+Keep "reply" short; if it's a place_search, say you're looking, e.g. "Here's what I found:".
 """
 
 
@@ -190,12 +188,9 @@ async def _query_mapbox(search_query: str, near: LatLng, limit: int, *, is_categ
         if is_category
         else FORWARD_SEARCH_URL
     )
-    d = SEARCH_BBOX_DEGREES
-    bbox = f"{near.lng - d},{near.lat - d},{near.lng + d},{near.lat + d}"
     params = {
         "access_token": settings.mapbox_token,
         "proximity": f"{near.lng},{near.lat}",
-        "bbox": bbox,
         "limit": limit,
     }
     if not is_category:
@@ -213,10 +208,6 @@ async def _query_mapbox(search_query: str, near: LatLng, limit: int, *, is_categ
         lng, lat = feature["geometry"]["coordinates"]
         props = feature.get("properties", {})
         distance_km = round(_haversine_km(near, {"lat": lat, "lng": lng}), 1)
-        # Mapbox's proximity param is a soft bias, not a hard filter - a global
-        # name match on the other side of the planet is worse than no match.
-        if distance_km > MAX_RESULT_DISTANCE_KM:
-            continue
         results.append(
             PlaceResult(
                 name=props.get("name", "Unknown place"),
@@ -231,15 +222,17 @@ async def _query_mapbox(search_query: str, near: LatLng, limit: int, *, is_categ
     return results
 
 
-async def resolve_places(search_query: str, near: LatLng, limit: int = 5) -> list[PlaceResult]:
+async def resolve_places(search_query: str, near: LatLng, limit: int = RESULT_LIMIT) -> list[PlaceResult]:
     key = search_query.lower()
     osm_tag = CATEGORY_TO_OSM_TAG.get(key)
 
     if osm_tag:
         results = await _query_overpass(*osm_tag, near, limit)
-        if results is not None:
+        if results:
             return results
-        # Overpass unreachable - fall back to Mapbox's category search.
+        # Overpass unreachable OR nothing within its local radius - fall back
+        # to Mapbox's category search, which has no distance restriction, so
+        # the user always gets whatever exists rather than an empty answer.
         return await _query_mapbox(key, near, limit, is_category=True)
 
     return await _query_mapbox(search_query, near, limit, is_category=False)

@@ -11,7 +11,7 @@ import { DEFAULT_CENTER } from '@/constants/map.constant'
 const WELCOME = {
     role: 'assistant',
     content:
-        "Hi! Ask me to find a place nearby - e.g. \"nearest restaurant\" or \"where is Square company\" - and I can start a ride there for you.",
+        "Hi! Ask me to find any place - e.g. \"nearest restaurant\" or \"where is Square company\" - and I can start a ride there for you.",
 }
 
 // Floating ride-search assistant: the model only ever parses intent, real

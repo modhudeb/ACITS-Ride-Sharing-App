@@ -1,0 +1,20 @@
+# SITE_ADDRESS comes from docker-compose (e.g. "acits.duckdns.org").
+# With a real domain, Caddy provisions and renews Let's Encrypt HTTPS
+# automatically. Set SITE_ADDRESS=":80" to run plain HTTP (local testing).
+{$SITE_ADDRESS}
+
+encode zstd gzip
+
+# API + WebSocket traffic goes to the FastAPI container; reverse_proxy
+# passes the Upgrade header through, so /api/v1/ws works unchanged.
+handle /api/* {
+	reverse_proxy backend:8000
+}
+
+# Everything else is the React SPA - unknown paths fall back to index.html
+# so client-side routes (/passenger, /admin, ...) work on hard refresh.
+handle {
+	root * /srv
+	try_files {path} /index.html
+	file_server
+}

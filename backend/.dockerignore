@@ -1,0 +1,11 @@
+# Secrets are injected at runtime via docker-compose env_file - never baked
+# into the image.
+.env
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+tests/

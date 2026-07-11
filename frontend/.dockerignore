@@ -1,0 +1,9 @@
+# Secrets/local config - the Mapbox token comes in as a build arg instead.
+.env
+.env.*
+
+node_modules/
+build/
+dist/
+android/
+.vite-cache/

@@ -1,0 +1,37 @@
+# Production deployment: one FastAPI container + one Caddy container that
+# serves the built web app, terminates HTTPS, and proxies /api (HTTP + WS)
+# to the backend. The database is Neon (already cloud-hosted) - nothing to
+# run here for it.
+#
+# On the server:
+#   1. cp .env.example .env          (set SITE_ADDRESS + VITE_MAPBOX_TOKEN)
+#   2. create backend/.env           (see backend/.env.example)
+#   3. docker compose up -d --build
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN}
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      # Persist certificates so restarts don't re-hit Let's Encrypt limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

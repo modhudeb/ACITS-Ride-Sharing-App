@@ -20,6 +20,6 @@ async def chat(
     if intent["intent"] == "place_search" and intent["search_query"]:
         places = await assistant_service.resolve_places(intent["search_query"], payload.location)
         if not places:
-            intent["reply"] = f"I couldn't find anything nearby for \"{intent['search_query']}\"."
+            intent["reply"] = f"I couldn't find anything for \"{intent['search_query']}\"."
 
     return AssistantChatResponse(reply=intent["reply"], places=places)
