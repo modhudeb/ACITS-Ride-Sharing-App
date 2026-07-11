@@ -95,13 +95,20 @@ const ChatAssistant = () => {
                 type="button"
                 aria-label="Open ride assistant"
                 onClick={() => setOpen(true)}
-                className="fixed fab-safe z-20 flex h-14 w-14 items-center justify-center rounded-full bg-white p-2.5 text-white shadow-lg ring-2 ring-emerald-600/20 transition-transform hover:scale-105"
+                className="fixed fab-safe z-20 flex h-14 w-14 items-center justify-center rounded-full transition-transform hover:scale-105"
             >
-                <img
-                    src="/img/logo/logo-light-streamline.png"
-                    alt="Open ACITS ride assistant"
-                    className="h-full w-full object-contain"
-                />
+                {/* Soft pulsing glow behind the button - the plain white/faint-ring
+                    version was easy to miss against a busy map background. */}
+                <span className="absolute inset-0 -z-10 animate-pulse rounded-full bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-500 opacity-70 blur-lg" />
+                <span className="relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-500 p-[2.5px] shadow-lg">
+                    <span className="flex h-full w-full items-center justify-center rounded-full bg-white p-2.5">
+                        <img
+                            src="/img/logo/logo-light-streamline.png"
+                            alt="Open ACITS ride assistant"
+                            className="h-full w-full object-contain"
+                        />
+                    </span>
+                </span>
             </button>
         )
     }
