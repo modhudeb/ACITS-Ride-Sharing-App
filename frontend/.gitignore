@@ -36,3 +36,4 @@ android/app/release/
 *.sln
 *.sw?
 .vite-cache/
+.eslintcache

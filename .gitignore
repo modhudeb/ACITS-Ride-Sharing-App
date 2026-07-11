@@ -23,6 +23,14 @@ Desktop.ini
 *.key
 serviceAccountKey.json
 
+# Android release-signing key and its passwords - Play Store requires the
+# SAME key for every future update of an app, so a leaked one can't just be
+# rotated like any other credential (also mirrored in frontend/android/
+# .gitignore, which is where these would actually be generated).
+*.jks
+*.keystore
+key.properties
+
 # Dependencies / build output
 node_modules/
 dist/
@@ -35,12 +43,25 @@ __pycache__/
 .venv/
 venv/
 *.db
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JS tooling caches
+.eslintcache
 
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+
+# Editor/merge-conflict backup files
+*.orig
+*.bak
+*.tmp
 
 # Claude Code local settings
 .claude/

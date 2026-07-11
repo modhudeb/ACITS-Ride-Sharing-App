@@ -7,3 +7,14 @@ serviceAccountKey.json
 
 # SQLite fallback (see core/config.py) - only created if DATABASE_URL isn't set
 *.db
+
+# Test/lint/type-check tool caches - pytest already self-ignores via an
+# auto-generated .gitignore inside .pytest_cache/, but that only exists
+# after tests have run once; listing it explicitly here doesn't depend on
+# that. mypy/ruff/coverage aren't in requirements.txt today, but ignoring
+# their output costs nothing if they're ever added.
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
