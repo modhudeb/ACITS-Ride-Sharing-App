@@ -68,9 +68,13 @@ const MapLayout = ({ children }) => {
                 </nav>
 
                 <div className="flex shrink-0 items-center gap-2">
-                    <div className="hidden h-8 w-8 place-items-center rounded-full bg-emerald-600 text-xs font-semibold text-white sm:grid">
+                    <Link
+                        to="/profile"
+                        aria-label="View profile"
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-600 text-xs font-semibold text-white transition-transform hover:scale-105"
+                    >
                         {initials}
-                    </div>
+                    </Link>
                     <Button size="sm" variant="plain" onClick={() => signOut()}>
                         Sign out
                     </Button>

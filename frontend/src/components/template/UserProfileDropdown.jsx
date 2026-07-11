@@ -6,7 +6,13 @@ import { Link } from 'react-router'
 import { PiUserDuotone, PiSignOutDuotone } from 'react-icons/pi'
 import { useAuth } from '@/auth'
 
-const dropdownItemList = []
+const dropdownItemList = [
+    {
+        label: 'View Profile',
+        path: '/profile',
+        icon: <PiUserDuotone />,
+    },
+]
 
 const _UserDropdown = () => {
     const { avatar, userName, email } = useSessionUser((state) => state.user)

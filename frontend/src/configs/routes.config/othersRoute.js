@@ -12,6 +12,12 @@ const othersRoute = [
             pageContainerType: 'contained',
         },
     },
+    {
+        key: 'profile',
+        path: '/profile',
+        component: lazy(() => import('@/views/others/Profile')),
+        authority: [ADMIN, PASSENGER, DRIVER],
+    },
 ]
 
 export default othersRoute
