@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Map, { Marker, Source, Layer } from 'react-map-gl/mapbox'
+import { motion, useDragControls } from 'framer-motion'
+import { TbGripHorizontal, TbMinus, TbMaximize } from 'react-icons/tb'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import Alert from '@/components/ui/Alert'
 import Button from '@/components/ui/Button'
@@ -174,7 +176,7 @@ const VehicleSetupCard = ({ onSaved, onRefresh }) => {
                 onVehicleTypeChange={handleVehicleTypeChange}
             />
             {error && (
-                <Alert type="danger" showIcon className="mt-3">
+                <Alert showIcon type="danger" className="mt-3">
                     {error}
                 </Alert>
             )}
@@ -343,6 +345,11 @@ const DriverHome = () => {
     const lastSentRef = useRef(0)
     const lastSentPosRef = useRef(null)
     const centeredRef = useRef(false)
+    const [panelMinimized, setPanelMinimized] = useState(false)
+    // Bounds element keeps the draggable panel from ever leaving the screen -
+    // on a phone there'd be no way to drag it back.
+    const panelBoundsRef = useRef(null)
+    const panelDragControls = useDragControls()
 
     const { profile: driverProfile, refetch: refetchDriverProfile } =
         useDriverProfile(user.uid)
@@ -565,14 +572,14 @@ const DriverHome = () => {
             stopWatchingLocation()
         }
         return stopWatchingLocation
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+         
     }, [onlineStatus])
 
     if (user.status === 'pending_approval') {
         return (
             <div className="h-full flex flex-col items-center justify-center p-6 text-center">
                 <h3 className="mb-2">Application under review</h3>
-                <Alert type="info" showIcon className="max-w-md">
+                <Alert showIcon type="info" className="max-w-md">
                     Thanks for signing up, {user.userName || 'driver'}. An
                     administrator needs to approve your driver account before
                     you can go online and accept rides. We&apos;ll let you
@@ -586,7 +593,7 @@ const DriverHome = () => {
         return (
             <div className="h-full flex flex-col items-center justify-center p-6 text-center">
                 <h3 className="mb-2">Account suspended</h3>
-                <Alert type="danger" showIcon className="max-w-md">
+                <Alert showIcon type="danger" className="max-w-md">
                     Your driver account has been suspended. Contact support if
                     you believe this is a mistake.
                 </Alert>
@@ -709,11 +716,11 @@ const DriverHome = () => {
             <OfflineBanner />
             <Map
                 {...viewState}
-                onMove={(evt) => setViewState(evt.viewState)}
+                reuseMaps
                 mapboxAccessToken={MAPBOX_TOKEN}
                 mapStyle="mapbox://styles/mapbox/streets-v12"
-                reuseMaps
                 style={{ width: '100%', height: '100%' }}
+                onMove={(evt) => setViewState(evt.viewState)}
             >
                 {heatmapGeoJson && (
                     <Source
@@ -794,8 +801,54 @@ const DriverHome = () => {
                 )}
             </Map>
 
-            <div className="absolute bottom-safe-panel left-4 right-4 pb-16 sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 flex flex-col gap-3 max-h-[78dvh] sm:max-h-[calc(100dvh-7rem)] overflow-auto">
-                <div className="mx-auto mb-1 h-1.5 w-10 shrink-0 rounded-full bg-gray-300 dark:bg-gray-600 sm:hidden" />
+            {/* Invisible drag boundary inset from the viewport edges - the
+                panel can be dragged anywhere but never fully off-screen. */}
+            <div
+                ref={panelBoundsRef}
+                className="pointer-events-none absolute inset-2 z-10"
+            />
+            <motion.div
+                drag
+                dragControls={panelDragControls}
+                dragListener={false}
+                dragConstraints={panelBoundsRef}
+                dragMomentum={false}
+                className={`absolute bottom-safe-panel z-20 flex flex-col gap-2 ${
+                    panelMinimized
+                        ? 'left-4 right-4 sm:left-auto sm:right-4 sm:top-4 sm:w-80'
+                        : 'left-4 right-4 pb-16 max-h-[78dvh] sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 sm:max-h-[calc(100dvh-7rem)]'
+                }`}
+            >
+                <div
+                    className="flex shrink-0 cursor-grab touch-none items-center justify-between rounded-xl bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur active:cursor-grabbing dark:bg-gray-800/95"
+                    onPointerDown={(e) => panelDragControls.start(e)}
+                >
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-300">
+                        <TbGripHorizontal size={16} /> Driver panel
+                    </span>
+                    <div className="flex items-center gap-1 text-gray-500 dark:text-gray-300">
+                        <button
+                            type="button"
+                            aria-label={
+                                panelMinimized
+                                    ? 'Expand driver panel'
+                                    : 'Minimize driver panel'
+                            }
+                            className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+                            onClick={() => setPanelMinimized((m) => !m)}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            {panelMinimized ? (
+                                <TbMaximize size={16} />
+                            ) : (
+                                <TbMinus size={16} />
+                            )}
+                        </button>
+                    </div>
+                </div>
+
+                {!panelMinimized && (
+                <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
                 <Card>
                     <div className="flex items-center justify-between">
                         <div>
@@ -974,7 +1027,9 @@ const DriverHome = () => {
                         </div>
                     </div>
                 )}
-            </div>
+                </div>
+                )}
+            </motion.div>
         </div>
     )
 }
