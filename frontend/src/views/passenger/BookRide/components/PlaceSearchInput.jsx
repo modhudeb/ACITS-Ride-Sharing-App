@@ -25,7 +25,10 @@ async function searchPhoton(text, proximity, signal) {
     const seen = new Set()
     for (const feature of data.features || []) {
         const props = feature.properties || {}
-        if (props.countrycode && props.countrycode !== 'BD') continue
+        // Strict equality, not "skip only if present and different" - a
+        // result missing countrycode entirely (some lower-quality OSM
+        // entries lack it) must not slip through as if it were BD.
+        if ((props.countrycode || '').toUpperCase() !== 'BD') continue
         const [lng, lat] = feature.geometry?.coordinates || []
         if (lat == null || lng == null) continue
 
