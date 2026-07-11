@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "build:apk": "vite build --mode capacitor && cap sync android",
+    "cap:open": "cap open android",
     "prettier": "npx prettier src --check",
     "prettier:fix": "npm run prettier -- --write",
     "lint": "npx eslint",
@@ -14,6 +16,9 @@
     "format": "npm run prettier:fix && npm run lint:fix"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/geolocation": "^8.2.0",
     "@floating-ui/react": "^0.27.16",
     "@fullcalendar/core": "^6.1.18",
     "@fullcalendar/daygrid": "^6.1.18",
@@ -36,7 +41,6 @@
     "d3-fetch": "^3.0.1",
     "d3-scale": "^4.0.2",
     "dayjs": "^1.11.13",
-    "firebase": "^11.1.0",
     "framer-motion": "12.23.12",
     "gantt-task-react": "^0.3.9",
     "html-react-parser": "^5.2.1",
@@ -70,6 +74,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
     "@eslint/compat": "^1.2.4",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.17.0",

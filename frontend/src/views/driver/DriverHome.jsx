@@ -36,8 +36,8 @@ import { DEFAULT_CENTER } from '@/constants/map.constant'
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 
 // Adaptive heartbeat: report quickly while actually moving, but a parked
-// truck only pings once a minute - an order of magnitude fewer Firestore
-// writes (and downstream listener reads) for an idle fleet.
+// truck only pings once a minute - an order of magnitude fewer location
+// writes (and downstream realtime pushes) for an idle fleet.
 const LOCATION_SEND_INTERVAL_MS = 10000
 const IDLE_SEND_INTERVAL_MS = 60000
 const MIN_MOVE_KM = 0.03

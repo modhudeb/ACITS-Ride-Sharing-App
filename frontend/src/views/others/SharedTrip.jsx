@@ -8,9 +8,8 @@ import Spinner from '@/components/ui/Spinner'
 import appConfig from '@/configs/app.config'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-// Each poll costs the backend 1-2 Firestore reads (ride + driver location),
-// so this is a balance between map smoothness for the viewer and read quota:
-// 10s is still plenty to follow a trip, at half the cost of the old 5s.
+// Balances map smoothness for the viewer against backend query load - 10s is
+// still plenty to follow a trip.
 const POLL_INTERVAL_MS = 10000
 
 const routeLineLayer = {
@@ -29,8 +28,8 @@ const statusLabel = {
 }
 
 // Read-only live trip view for people the passenger shares their link with.
-// Anonymous viewers can't hold Firestore listeners, so this polls a public
-// token-gated endpoint instead.
+// Anonymous viewers can't authenticate onto the realtime WebSocket, so this
+// polls a public token-gated endpoint instead.
 const SharedTrip = () => {
     const { rideId } = useParams()
     const [searchParams] = useSearchParams()
@@ -165,7 +164,7 @@ const SharedTrip = () => {
                                 )}
                                 {trip.vehicle?.plate && (
                                     <div className="flex justify-between">
-                                        <span>Truck</span>
+                                        <span>Vehicle</span>
                                         <span>
                                             {trip.vehicle.model} (
                                             {trip.vehicle.plate})

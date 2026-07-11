@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react'
-import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Map, { Marker } from 'react-map-gl/mapbox'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import Card from '@/components/ui/Card'
 import DriverDotsLayer from '@/components/shared/DriverDotsLayer'
-import { db } from '@/services/firebase/firebaseApp'
+import useRealtimeTopic from '@/utils/hooks/useRealtimeTopic'
+import { apiGetOnlineDriverLocations } from '@/services/DriverService'
+import { apiGetPendingRequests } from '@/services/RideService'
+import { apiGetActiveAdminRides } from '@/services/AdminService'
 import { DEFAULT_CENTER } from '@/constants/map.constant'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-const STALE_LOCATION_MS = 2 * 60 * 1000
 
 const StatTile = ({ label, value }) => (
     <div>
@@ -17,10 +18,12 @@ const StatTile = ({ label, value }) => (
     </div>
 )
 
-// Admin control room: every fresh online driver and every active trip,
-// live from the same Firestore listeners the apps themselves use.
+// Admin control room: every online driver's live location, every active
+// trip, and the pending-request count - built on REST snapshots refreshed
+// by realtime signals instead of Firestore listeners.
 const LiveOps = () => {
-    const [drivers, setDrivers] = useState([])
+    const driversRef = useRef(new Map())
+    const [, forceRender] = useState(0)
     const [activeRides, setActiveRides] = useState([])
     const [pendingCount, setPendingCount] = useState(0)
     const [viewState, setViewState] = useState({
@@ -29,53 +32,52 @@ const LiveOps = () => {
         zoom: 12,
     })
 
-    useEffect(() => {
-        const q = query(
-            collection(db, 'driver_profiles'),
-            where('onlineStatus', '==', 'online'),
-        )
-        return onSnapshot(q, (snapshot) => {
-            setDrivers(
-                snapshot.docs
-                    .map((docSnap) => ({
-                        uid: docSnap.id,
-                        location: docSnap.data().currentLocation,
-                        vehicle: docSnap.data().vehicle,
-                    }))
-                    .filter((driver) => {
-                        const updatedAt = driver.location?.updatedAt
-                        return (
-                            updatedAt?.toMillis &&
-                            Date.now() - updatedAt.toMillis() <
-                                STALE_LOCATION_MS
-                        )
-                    }),
-            )
-        })
+    const refetchDrivers = useCallback(() => {
+        apiGetOnlineDriverLocations()
+            .then((rows) => {
+                driversRef.current = new Map(
+                    rows.map((row) => [row.uid, { uid: row.uid, location: { lat: row.lat, lng: row.lng } }]),
+                )
+                forceRender((n) => n + 1)
+            })
+            .catch(() => {})
+    }, [])
+
+    const refetchRides = useCallback(() => {
+        apiGetActiveAdminRides()
+            .then(setActiveRides)
+            .catch(() => setActiveRides([]))
+    }, [])
+
+    const refetchPending = useCallback(() => {
+        apiGetPendingRequests()
+            .then((rows) => setPendingCount(rows.length))
+            .catch(() => setPendingCount(0))
     }, [])
 
     useEffect(() => {
-        const q = query(
-            collection(db, 'rides'),
-            where('status', 'in', ['accepted', 'in_progress']),
-        )
-        return onSnapshot(q, (snapshot) => {
-            setActiveRides(
-                snapshot.docs.map((docSnap) => ({
-                    id: docSnap.id,
-                    ...docSnap.data(),
-                })),
-            )
-        })
-    }, [])
+        refetchDrivers()
+        refetchRides()
+        refetchPending()
+    }, [refetchDrivers, refetchRides, refetchPending])
 
-    useEffect(() => {
-        const q = query(
-            collection(db, 'ride_requests'),
-            where('status', '==', 'pending'),
-        )
-        return onSnapshot(q, (snapshot) => setPendingCount(snapshot.size))
-    }, [])
+    useRealtimeTopic('driver_locations', (message) => {
+        if (message.type !== 'state') return
+        const { uid, lat, lng, online_status: onlineStatus } = message.data
+        if (onlineStatus !== 'online' || lat == null) {
+            driversRef.current.delete(uid)
+        } else {
+            driversRef.current.set(uid, { uid, location: { lat, lng } })
+        }
+        forceRender((n) => n + 1)
+    })
+
+    useRealtimeTopic('admin_ops', () => {
+        refetchRides()
+        refetchPending()
+    })
+
+    const drivers = Array.from(driversRef.current.values())
 
     return (
         <div className="relative h-full w-full">

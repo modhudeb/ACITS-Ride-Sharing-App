@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ACITS</string>
+    <string name="title_activity_main">ACITS</string>
+    <string name="package_name">com.acits.rideshare</string>
+    <string name="custom_url_scheme">com.acits.rideshare</string>
+</resources>

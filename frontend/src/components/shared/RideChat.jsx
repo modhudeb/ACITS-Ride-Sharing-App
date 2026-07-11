@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
-import { db } from '@/services/firebase/firebaseApp'
+import { apiSendRideMessage } from '@/services/RideService'
 import useRideMessages from '@/utils/hooks/useRideMessages'
 
-// Lightweight passenger<->driver chat for an active ride. Messages live in a
-// subcollection of the ride and arrive via the same realtime channel as
-// ride status, so there is no extra backend involved.
-const RideChat = ({ rideId, currentUid, currentName }) => {
+// Lightweight passenger<->driver chat for an active ride. The backend
+// derives the sender's name from their own profile (not a client-supplied
+// value) and fans each message out over the ride_chat:{id} realtime topic.
+const RideChat = ({ rideId, currentUid }) => {
     const [open, setOpen] = useState(false)
     const [text, setText] = useState('')
     const [sending, setSending] = useState(false)
@@ -26,12 +25,7 @@ const RideChat = ({ rideId, currentUid, currentName }) => {
         if (!trimmed || sending) return
         setSending(true)
         try {
-            await addDoc(collection(db, 'rides', rideId, 'messages'), {
-                senderId: currentUid,
-                senderName: currentName || 'User',
-                text: trimmed.slice(0, 500),
-                at: serverTimestamp(),
-            })
+            await apiSendRideMessage(rideId, trimmed)
             setText('')
         } finally {
             setSending(false)
@@ -69,7 +63,7 @@ const RideChat = ({ rideId, currentUid, currentName }) => {
                     </p>
                 )}
                 {messages.map((msg) => {
-                    const mine = msg.senderId === currentUid
+                    const mine = msg.sender_id === currentUid
                     return (
                         <div
                             key={msg.id}

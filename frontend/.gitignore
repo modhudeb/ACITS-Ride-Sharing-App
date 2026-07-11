@@ -13,6 +13,17 @@ dist-ssr
 build
 *.local
 .env
+.env.capacitor
+
+# Capacitor Android platform build output (the android/ project itself is
+# committed - it carries the geolocation permission and other manifest
+# customizations that a bare `cap add android` wouldn't reproduce).
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/captures/
+android/app/release/
 
 # Editor directories and files
 .vscode/*

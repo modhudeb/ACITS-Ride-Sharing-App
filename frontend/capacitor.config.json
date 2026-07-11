@@ -1,0 +1,8 @@
+{
+  "appId": "com.acits.rideshare",
+  "appName": "ACITS",
+  "webDir": "build",
+  "android": {
+    "allowMixedContent": true
+  }
+}

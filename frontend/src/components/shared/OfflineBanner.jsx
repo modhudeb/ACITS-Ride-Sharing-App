@@ -2,7 +2,8 @@ import useOnlineStatus from '@/utils/hooks/useOnlineStatus'
 
 // Shown on the live-tracking map views - the highest-stakes place for a
 // dropped connection to go unnoticed, since ride status/location updates
-// arrive via Firestore listeners that silently stall while offline.
+// arrive via the realtime WebSocket connection, which silently stalls while
+// offline.
 const OfflineBanner = () => {
     const online = useOnlineStatus()
     if (online) return null
