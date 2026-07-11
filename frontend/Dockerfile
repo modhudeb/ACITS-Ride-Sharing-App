@@ -15,6 +15,11 @@ COPY . .
 ARG VITE_MAPBOX_TOKEN
 ENV VITE_MAPBOX_TOKEN=${VITE_MAPBOX_TOKEN}
 
+# V8's default heap heuristic looks at the container's physical RAM (not
+# swap) and caps itself far too low on a 1GB host like a t3.micro, aborting
+# mid-build with "JavaScript heap out of memory". Raising it explicitly
+# fixes that regardless of the host's actual memory size.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 RUN npm run build
 
 # Stage 2: Caddy serves the static bundle, terminates HTTPS (automatic
