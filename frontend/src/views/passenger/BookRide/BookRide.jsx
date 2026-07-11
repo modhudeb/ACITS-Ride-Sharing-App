@@ -5,7 +5,6 @@ import {
     TbGripHorizontal,
     TbMinus,
     TbMaximize,
-    TbMinimize,
 } from 'react-icons/tb'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import Button from '@/components/ui/Button'
@@ -69,7 +68,6 @@ const BookRide = () => {
     const [scheduledAt, setScheduledAt] = useState('')
     const [estimateRetryCount, setEstimateRetryCount] = useState(0)
     const [panelMinimized, setPanelMinimized] = useState(false)
-    const [panelExpanded, setPanelExpanded] = useState(false)
     // Bounds element keeps the draggable panel from ever leaving the screen -
     // on a phone there'd be no way to drag it back.
     const panelBoundsRef = useRef(null)
@@ -90,19 +88,38 @@ const BookRide = () => {
 
     // The chat assistant hands off a selected place through this store rather
     // than router state, since the app's Suspense boundary remounts the whole
-    // route tree on every navigation (see pendingDestinationStore.js).
+    // route tree on every navigation (see pendingDestinationStore.js). When the
+    // assistant resolved an explicit origin too ("from X to Banani"), a `pickup`
+    // rides along and is applied here as well.
     useEffect(() => {
         const { pendingDestination, clearPendingDestination } =
             usePendingDestinationStore.getState()
         if (pendingDestination) {
-            setDestination(pendingDestination)
+            const dest = {
+                lat: pendingDestination.lat,
+                lng: pendingDestination.lng,
+                address: pendingDestination.address,
+            }
+            setDestination(dest)
+            if (pendingDestination.pickup) setPickup(pendingDestination.pickup)
+            setViewState((v) => ({
+                ...v,
+                latitude: dest.lat,
+                longitude: dest.lng,
+            }))
             clearPendingDestination()
         }
     }, [])
 
     const [hasCenteredOnRide, setHasCenteredOnRide] = useState(false)
 
-    const ride = useRideListener(rideId)
+    const rideFromSocket = useRideListener(rideId)
+    // Optimistic local override: on Android the cancel realtime push is
+    // sometimes dropped, leaving the ride stuck in its pre-cancel state. Once
+    // the HTTP cancel succeeds we force the cancelled view here so the panel
+    // never gets stuck on a live-but-cancelled ride.
+    const [rideOverride, setRideOverride] = useState(null)
+    const ride = rideOverride || rideFromSocket
     const rideActive = ride && ride.status !== 'cancelled'
     const trackingDriver =
         ride?.status === 'accepted' || ride?.status === 'in_progress'
@@ -253,6 +270,7 @@ const BookRide = () => {
                         : null,
             })
             setRideId(created.id)
+            setRideOverride(null)
         } catch (err) {
             setError(
                 err?.response?.data?.detail ||
@@ -268,6 +286,13 @@ const BookRide = () => {
         setCancelling(true)
         try {
             await apiCancelRide(rideId, 'Cancelled by passenger')
+            // Force the cancelled view locally - don't depend on the realtime
+            // push arriving (it's dropped on Android often enough to look stuck).
+            setRideOverride({
+                ...(rideFromSocket || {}),
+                status: 'cancelled',
+                cancel_reason: 'Cancelled by passenger',
+            })
         } catch {
             // ride may already have moved on server-side; listener will reflect true state
         } finally {
@@ -296,6 +321,7 @@ const BookRide = () => {
 
     const handleStartOver = () => {
         setRideId(null)
+        setRideOverride(null)
         setDestination(null)
         setEstimate(null)
         setPickingDestinationOnMap(false)
@@ -314,6 +340,7 @@ const BookRide = () => {
     // fresh fare rather than showing a stale one).
     const handleSearchAgain = () => {
         setRideId(null)
+        setRideOverride(null)
         setEstimate(null)
         setPickingDestinationOnMap(false)
         setHasCenteredOnRide(false)
@@ -413,16 +440,15 @@ const BookRide = () => {
                 className="pointer-events-none absolute inset-2 z-10"
             />
             <motion.div
-                key={panelExpanded ? 'expanded' : 'normal'}
                 drag
                 dragControls={panelDragControls}
                 dragListener={false}
                 dragConstraints={panelBoundsRef}
                 dragMomentum={false}
                 className={`absolute bottom-safe-panel z-20 flex flex-col gap-2 ${
-                    panelExpanded
-                        ? 'left-2 right-2 max-h-[88dvh] sm:left-auto sm:right-2 sm:top-2 sm:w-[34rem] sm:max-h-[calc(100dvh-1.5rem)]'
-                        : 'left-4 right-4 pb-16 max-h-[70dvh] sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 sm:max-h-[calc(100dvh-7rem)]'
+                    panelMinimized
+                        ? 'left-4 right-4 sm:left-auto sm:right-4 sm:top-4 sm:w-80'
+                        : 'left-4 right-4 pb-16 max-h-[70dvh] sm:pb-0 sm:left-auto sm:right-4 sm:top-4 sm:w-96 lg:w-[30rem] sm:max-h-[calc(100dvh-7rem)]'
                 }`}
             >
                 <div
@@ -437,30 +463,17 @@ const BookRide = () => {
                             type="button"
                             aria-label={
                                 panelMinimized
-                                    ? 'Restore ride panel'
+                                    ? 'Expand ride panel'
                                     : 'Minimize ride panel'
                             }
                             className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
                             onClick={() => setPanelMinimized((m) => !m)}
                             onPointerDown={(e) => e.stopPropagation()}
                         >
-                            <TbMinus size={16} />
-                        </button>
-                        <button
-                            type="button"
-                            aria-label={
-                                panelExpanded
-                                    ? 'Shrink ride panel'
-                                    : 'Expand ride panel'
-                            }
-                            className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
-                            onClick={() => setPanelExpanded((e) => !e)}
-                            onPointerDown={(e) => e.stopPropagation()}
-                        >
-                            {panelExpanded ? (
-                                <TbMinimize size={16} />
-                            ) : (
+                            {panelMinimized ? (
                                 <TbMaximize size={16} />
+                            ) : (
+                                <TbMinus size={16} />
                             )}
                         </button>
                     </div>

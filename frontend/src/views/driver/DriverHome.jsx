@@ -59,12 +59,29 @@ const heatmapLayer = {
 }
 
 // Solid line for a committed (accepted) ride's traffic-optimized route to
-// the current target (pickup, then destination once picked up).
+// the current target (pickup, then destination once picked up). This is the
+// live nav line from the driver's current position, so it only appears once
+// GPS is resolved and depends on ETA lookups succeeding.
 const activeRouteLayer = {
     id: 'active-route-line',
     type: 'line',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
     paint: { 'line-color': '#0d9488', 'line-width': 4 },
+}
+
+// Planned booking route (pickup -> destination) as sent in the ride payload -
+// the exact line the passenger sees. Drawn independently of live ETA so the
+// driver always sees the full route to the destination even if their GPS or
+// the ETA service is momentarily unavailable.
+const plannedRouteLayer = {
+    id: 'planned-route-line',
+    type: 'line',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+        'line-color': '#0d9488',
+        'line-width': 4,
+        'line-opacity': 0.55,
+    },
 }
 
 // Dashed amber line - matches the pending-request marker color - for a
@@ -207,7 +224,7 @@ const ActiveRideCard = ({
     ride,
     position,
     user,
-    busyRideId,
+    busyAction,
     onStartTrip,
     onCompleteTrip,
     onCancelTrip,
@@ -278,7 +295,7 @@ const ActiveRideCard = ({
                     <Button
                         block
                         variant="solid"
-                        loading={busyRideId === ride.id}
+                        loading={busyAction === 'start'}
                         onClick={() => onStartTrip(ride.id)}
                     >
                         Picked up - start trip
@@ -288,7 +305,7 @@ const ActiveRideCard = ({
                     <Button
                         block
                         variant="solid"
-                        loading={busyRideId === ride.id}
+                        loading={busyAction === 'complete'}
                         onClick={() => onCompleteTrip(ride.id)}
                     >
                         Dropped off - complete
@@ -298,7 +315,7 @@ const ActiveRideCard = ({
                     <Button
                         block
                         variant="plain"
-                        loading={busyRideId === ride.id}
+                        loading={busyAction === 'cancel'}
                         onClick={() => onCancelTrip(ride.id)}
                     >
                         Cancel trip
@@ -314,7 +331,9 @@ const DriverHome = () => {
     const [togglingOnline, setTogglingOnline] = useState(false)
     const [position, setPosition] = useState(null)
     const [respondingId, setRespondingId] = useState('')
-    const [busyRideId, setBusyRideId] = useState('')
+    // Per-action busy flag so only the tapped button spins (start / complete /
+    // cancel) instead of every button on the card at once.
+    const [busy, setBusy] = useState(null)
     const [viewState, setViewState] = useState({
         latitude: DEFAULT_CENTER.lat,
         longitude: DEFAULT_CENTER.lng,
@@ -332,6 +351,12 @@ const DriverHome = () => {
 
     const activeRides = useActiveDriverRides(user.uid)
 
+    // Optimistic hide: on Android the cancel realtime push sometimes doesn't
+    // land, leaving a cancelled ride stuck on screen. Marking it locally the
+    // moment the cancel call succeeds guarantees the card disappears.
+    const [cancelledIds, setCancelledIds] = useState(() => new Set())
+    const visibleRides = activeRides.filter((r) => !cancelledIds.has(r.id))
+
     // Traffic-optimized route + ETA per active ride, reported up by each
     // ActiveRideCard (see onEtaChange) so the map can draw the line - kept
     // pruned to only currently-active ride ids.
@@ -340,14 +365,14 @@ const DriverHome = () => {
         setDriverEtas((prev) => (prev[rideId] === eta ? prev : { ...prev, [rideId]: eta }))
     }, [])
     useEffect(() => {
-        const activeIds = new Set(activeRides.map((r) => r.id))
+        const activeIds = new Set(visibleRides.map((r) => r.id))
         setDriverEtas((prev) => {
             const next = Object.fromEntries(
                 Object.entries(prev).filter(([id]) => activeIds.has(id)),
             )
             return Object.keys(next).length === Object.keys(prev).length ? prev : next
         })
-    }, [activeRides])
+    }, [visibleRides])
 
     // One-off route preview for a pending request the driver taps before
     // deciding to accept - not polled, since nothing is committed yet.
@@ -356,15 +381,15 @@ const DriverHome = () => {
     const [previewLoading, setPreviewLoading] = useState(false)
 
     // Live capacity ledger: what's already committed on the truck.
-    const usedKg = activeRides.reduce(
+    const usedKg = visibleRides.reduce(
         (sum, r) => sum + (r.goods?.weight_kg || 0),
         0,
     )
-    const usedM3 = activeRides.reduce(
+    const usedM3 = visibleRides.reduce(
         (sum, r) => sum + (r.goods?.volume_m3 || 0),
         0,
     )
-    const riders = activeRides.length
+    const riders = visibleRides.length
     const seatLeft = capacity ? riders < capacity.maxPassengers : false
 
     const fitsRequest = (request) => {
@@ -625,30 +650,38 @@ const DriverHome = () => {
     }
 
     const handleCancelTrip = async (rideId) => {
-        setBusyRideId(rideId)
+        setBusy({ id: rideId, action: 'cancel' })
         try {
             await apiCancelRide(rideId, 'Cancelled by driver')
+            // Hide optimistically so a dropped realtime push can't leave the
+            // cancelled ride stuck on screen (notably on Android).
+            setCancelledIds((prev) => {
+                const next = new Set(prev)
+                next.add(rideId)
+                return next
+            })
+            notify('Trip cancelled', 'success')
         } catch {
             notify('Could not cancel trip', 'danger')
         } finally {
-            setBusyRideId('')
+            setBusy(null)
         }
     }
 
     const handleStartTrip = async (rideId) => {
-        setBusyRideId(rideId)
+        setBusy({ id: rideId, action: 'start' })
         try {
             await apiStartRide(rideId)
             notify('Trip started', 'success')
         } catch (err) {
             notify(err?.response?.data?.detail || 'Could not start trip', 'danger')
         } finally {
-            setBusyRideId('')
+            setBusy(null)
         }
     }
 
     const handleCompleteTrip = async (rideId) => {
-        setBusyRideId(rideId)
+        setBusy({ id: rideId, action: 'complete' })
         try {
             await apiCompleteRide(rideId)
             notify('Trip completed', 'success')
@@ -658,7 +691,7 @@ const DriverHome = () => {
                 'danger',
             )
         } finally {
-            setBusyRideId('')
+            setBusy(null)
         }
     }
 
@@ -692,12 +725,27 @@ const DriverHome = () => {
                     </Source>
                 )}
 
-                {activeRides.map((ride) => {
+                {visibleRides.map((ride) => {
                     const geoJson = toRouteGeoJson(driverEtas[ride.id]?.routePath)
                     if (!geoJson) return null
                     return (
                         <Source key={`route-${ride.id}`} id={`route-${ride.id}`} type="geojson" data={geoJson}>
                             <Layer {...activeRouteLayer} id={`active-route-line-${ride.id}`} />
+                        </Source>
+                    )
+                })}
+
+                {visibleRides.map((ride) => {
+                    const geoJson = toRouteGeoJson(ride.route_path)
+                    if (!geoJson) return null
+                    return (
+                        <Source
+                            key={`planned-${ride.id}`}
+                            id={`planned-route-${ride.id}`}
+                            type="geojson"
+                            data={geoJson}
+                        >
+                            <Layer {...plannedRouteLayer} id={`planned-route-line-${ride.id}`} />
                         </Source>
                     )
                 })}
@@ -718,7 +766,7 @@ const DriverHome = () => {
                         />
                     ))}
 
-                {activeRides.map((ride) => {
+                {visibleRides.map((ride) => {
                     const target =
                         ride.status === 'accepted'
                             ? ride.pickup
@@ -815,13 +863,13 @@ const DriverHome = () => {
                     />
                 )}
 
-                {activeRides.map((ride) => (
+                {visibleRides.map((ride) => (
                     <ActiveRideCard
                         key={ride.id}
                         ride={ride}
                         position={position}
                         user={user}
-                        busyRideId={busyRideId}
+                        busyAction={busy?.id === ride.id ? busy.action : null}
                         onStartTrip={handleStartTrip}
                         onCompleteTrip={handleCompleteTrip}
                         onCancelTrip={handleCancelTrip}

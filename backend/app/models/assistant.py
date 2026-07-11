@@ -27,3 +27,8 @@ class PlaceResult(BaseModel):
 class AssistantChatResponse(BaseModel):
     reply: str
     places: list[PlaceResult] = Field(default_factory=list)
+    # When the passenger named an explicit origin (e.g. "from Gulshan to
+    # Banani"), this is that resolved start point. When they said "my
+    # place"/"here", pickup_query is null and the app falls back to
+    # their live GPS location instead.
+    pickup: PlaceResult | None = None

@@ -57,18 +57,25 @@ KNOWN_CATEGORIES = set(CATEGORY_TO_OSM_TAG)
 # The model only ever does intent parsing - it never answers "where is X"
 # itself, since it would happily invent addresses that don't exist. Real
 # coordinates always come from Mapbox's Search Box API in resolve_places().
-SYSTEM_PROMPT = """You are the ride-hailing app's chat assistant. The user may:
-- ask to find a place, nearby or anywhere (e.g. "nearest restaurant", "where is Square company", "any pharmacy around")
+SYSTEM_PROMPT = """You are the ride-hailing app's chat assistant for a passenger. The passenger may:
+- ask to book or take a ride, e.g. "book a ride to the airport", "ride from my place to Banani", "take me to Gulshan 2"
+- ask to find a place, nearby or anywhere, e.g. "nearest restaurant", "where is Square company"
 - just chat about their trip
 
-Respond with ONLY a JSON object, no other text, in this exact shape:
-{"intent": "place_search" or "chat", "search_query": "<term, or null>", "reply": "<brief friendly reply>"}
+The passenger's CURRENT GPS location is supplied to the app (not to you as text).
+When the passenger says "my place", "my location", "here", "where I am", "current
+location", or similar, that means THEIR CURRENT LOCATION - treat it as the origin/pickup
+and do NOT put it in pickup_query. Real coordinates always come from the map search;
+never invent addresses.
 
-If intent is "place_search" and the user is asking for a KIND of place, set
-search_query to one of these exact category ids: """ + ", ".join(sorted(KNOWN_CATEGORIES)) + """.
-If the user is asking for a specific named place or business (e.g. "Square company",
-"KFC Gulshan"), set search_query to that name as written instead.
-Keep "reply" short; if it's a place_search, say you're looking, e.g. "Here's what I found:".
+Respond with ONLY a JSON object, no other text, in this exact shape:
+{"intent": "book_ride" | "place_search" | "chat", "search_query": "<destination or place term, or null>", "pickup_query": "<origin term ONLY if the passenger named a start different from their current location, else null>", "reply": "<brief friendly reply>"}
+
+Rules:
+- intent "book_ride": set search_query to the DESTINATION they want to go to (e.g. "Banani", "airport"). If they also named an origin that is NOT their current location (e.g. "from Gulshan to Banani"), set pickup_query to that origin term; otherwise leave pickup_query null (the app uses their current location as the pickup).
+- intent "place_search": if they want a KIND of place, set search_query to one of these exact category ids: """ + ", ".join(sorted(KNOWN_CATEGORIES)) + """. If a specific named place/business, set search_query to that name as written. Leave pickup_query null.
+- intent "chat" (no place or ride): set search_query and pickup_query to null and reply conversationally.
+Keep "reply" short. For a booking or place search, say you're looking, e.g. "Finding a route to Banani...".
 """
 
 
@@ -128,6 +135,7 @@ async def parse_intent(message: str, history: list[ChatMessage]) -> dict:
     return {
         "intent": parsed.get("intent", "chat"),
         "search_query": parsed.get("search_query"),
+        "pickup_query": parsed.get("pickup_query"),
         "reply": parsed.get("reply", "").strip() or "Here's what I found:",
     }
 

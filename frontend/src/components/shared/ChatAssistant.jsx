@@ -8,7 +8,6 @@ import {
     TbSparkles,
     TbMinus,
     TbMaximize,
-    TbMinimize,
 } from 'react-icons/tb'
 import Button from '@/components/ui/Button'
 import Input from '@/components/ui/Input'
@@ -30,7 +29,6 @@ const ChatAssistant = () => {
     const navigate = useNavigate()
     const [open, setOpen] = useState(false)
     const [minimized, setMinimized] = useState(false)
-    const [expanded, setExpanded] = useState(false)
     const [messages, setMessages] = useState([WELCOME])
     const [input, setInput] = useState('')
     const [sending, setSending] = useState(false)
@@ -77,7 +75,12 @@ const ChatAssistant = () => {
             })
             setMessages((prev) => [
                 ...prev,
-                { role: 'assistant', content: res.reply, places: res.places },
+                {
+                    role: 'assistant',
+                    content: res.reply,
+                    places: res.places,
+                    pickup: res.pickup,
+                },
             ])
         } catch (err) {
             setMessages((prev) => [
@@ -94,14 +97,31 @@ const ChatAssistant = () => {
         }
     }
 
-    const handleBookRideHere = (place) => {
-        usePendingDestinationStore.getState().setPendingDestination({
+    const handleBookRideHere = (place, pickup) => {
+        const destination = {
             lat: place.lat,
             lng: place.lng,
             address: place.address
                 ? `${place.name}, ${place.address}`
                 : place.name,
-        })
+        }
+        // An explicit origin ("from Gulshan to Banani") rides along as
+        // `pickup`; when it's absent the booking screen falls back to the
+        // passenger's live GPS location as the pickup.
+        usePendingDestinationStore.getState().setPendingDestination(
+            pickup
+                ? {
+                      ...destination,
+                      pickup: {
+                          lat: pickup.lat,
+                          lng: pickup.lng,
+                          address: pickup.address
+                              ? `${pickup.name}, ${pickup.address}`
+                              : pickup.name,
+                      },
+                  }
+                : destination,
+        )
         navigate('/passenger')
         handleClose()
     }
@@ -111,7 +131,6 @@ const ChatAssistant = () => {
     const handleClose = () => {
         setOpen(false)
         setMinimized(false)
-        setExpanded(false)
     }
 
     if (!open) {
@@ -138,14 +157,10 @@ const ChatAssistant = () => {
         )
     }
 
-    const widthClass = expanded
-        ? 'w-[92vw] max-w-[92vw]'
-        : 'w-[22rem] max-w-[calc(100vw-2.5rem)]'
+    const widthClass = 'w-[22rem] max-w-[calc(100vw-2.5rem)]'
     const heightClass = minimized
         ? 'h-auto'
-        : expanded
-          ? 'h-[85dvh] max-h-[85dvh]'
-          : 'h-[28rem] max-h-[calc(100dvh-6rem)]'
+        : 'h-[28rem] max-h-[calc(100dvh-6rem)]'
 
     return (
         <>
@@ -157,7 +172,6 @@ const ChatAssistant = () => {
                 className="pointer-events-none fixed inset-4 z-10"
             />
             <motion.div
-                key={expanded ? 'expanded' : 'normal'}
                 drag
                 dragControls={dragControls}
                 dragListener={false}
@@ -177,30 +191,17 @@ const ChatAssistant = () => {
                             type="button"
                             aria-label={
                                 minimized
-                                    ? 'Restore ride assistant'
+                                    ? 'Expand ride assistant'
                                     : 'Minimize ride assistant'
                             }
                             className="rounded p-0.5 hover:bg-emerald-700"
                             onClick={() => setMinimized((m) => !m)}
                             onPointerDown={(e) => e.stopPropagation()}
                         >
-                            <TbMinus size={16} />
-                        </button>
-                        <button
-                            type="button"
-                            aria-label={
-                                expanded
-                                    ? 'Shrink ride assistant'
-                                    : 'Expand ride assistant'
-                            }
-                            className="rounded p-0.5 hover:bg-emerald-700"
-                            onClick={() => setExpanded((e) => !e)}
-                            onPointerDown={(e) => e.stopPropagation()}
-                        >
-                            {expanded ? (
-                                <TbMinimize size={16} />
-                            ) : (
+                            {minimized ? (
                                 <TbMaximize size={16} />
+                            ) : (
+                                <TbMinus size={16} />
                             )}
                         </button>
                         <button
@@ -252,7 +253,10 @@ const ChatAssistant = () => {
                                                 className="!bg-emerald-600 hover:!bg-emerald-700"
                                                 icon={<TbCar size={16} />}
                                                 onClick={() =>
-                                                    handleBookRideHere(place)
+                                                    handleBookRideHere(
+                                                        place,
+                                                        msg.pickup,
+                                                    )
                                                 }
                                             >
                                                 Book ride here
