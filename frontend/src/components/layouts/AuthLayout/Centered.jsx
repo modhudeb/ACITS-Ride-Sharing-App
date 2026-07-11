@@ -4,8 +4,8 @@ import { APP_NAME, APP_TAGLINE } from '@/constants/app.constant'
 
 const Centered = ({ children, ...rest }) => {
     return (
-        <div className="flex h-full items-center justify-center overflow-y-auto bg-gradient-to-br from-emerald-50 via-white to-emerald-100 px-4 py-10">
-            <div className="w-full max-w-[420px]">
+        <div className="flex min-h-full w-full justify-center overflow-y-auto bg-gradient-to-br from-emerald-50 via-white to-emerald-100 px-4 py-10">
+            <div className="my-auto w-full max-w-[420px]">
                 <div className="mb-6 flex flex-col items-center text-center">
                     <Logo
                         type="streamline"

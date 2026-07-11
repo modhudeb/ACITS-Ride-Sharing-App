@@ -24,6 +24,12 @@ const ROLE_OPTIONS = [
     { value: DRIVER, label: 'Driver', icon: TbSteeringWheel },
 ]
 
+const notify = (title, type) => {
+    toast.push(<Notification title={title} type={type} />, {
+        placement: 'top-center',
+    })
+}
+
 const SignInForm = (props) => {
     const [isSubmitting, setSubmitting] = useState(false)
     const [role, setRole] = useState(PASSENGER)
@@ -54,6 +60,8 @@ const SignInForm = (props) => {
 
             if (result?.status === 'failed') {
                 setMessage?.(result.message)
+            } else if (result?.status === 'success') {
+                notify('Signed in successfully', 'success')
             }
         }
 

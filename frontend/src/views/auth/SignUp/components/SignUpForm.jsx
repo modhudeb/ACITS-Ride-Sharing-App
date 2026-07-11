@@ -144,8 +144,9 @@ const SignUpForm = (props) => {
             return
         }
 
-        // Success: signUp already redirected. Resetting submitting is harmless
-        // since this component unmounts on navigation.
+        // Success: signUp already redirected. The toast (global, not tied to
+        // this component) survives the navigation so the user sees confirmation.
+        notify('Account created successfully', 'success')
         setSubmitting(false)
     }
 
