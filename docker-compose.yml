@@ -3,17 +3,29 @@
 # to the backend. The database is Neon (already cloud-hosted) - nothing to
 # run here for it.
 #
-# On the server:
+# Images are built locally (not on the server - a 1GB-RAM instance OOMs on
+# the frontend's Vite build) and pushed to Docker Hub. This same file drives
+# both sides:
+#
+# On your PC (build + push):
+#   1. cp .env.example .env          (set VITE_MAPBOX_TOKEN)
+#   2. docker compose build
+#   3. docker compose push
+#
+# On the server (pull + run):
 #   1. cp .env.example .env          (set SITE_ADDRESS + VITE_MAPBOX_TOKEN)
 #   2. create backend/.env           (see backend/.env.example)
-#   3. docker compose up -d --build
+#   3. docker compose pull
+#   4. docker compose up -d
 services:
   backend:
+    image: modhudeb/acits-backend:latest
     build: ./backend
     env_file: ./backend/.env
     restart: unless-stopped
 
   web:
+    image: modhudeb/acits-web:latest
     build:
       context: ./frontend
       args:
