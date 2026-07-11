@@ -5,6 +5,67 @@ import Spinner from '@/components/ui/Spinner'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 const SEARCH_TIMEOUT_MS = 8000
+const RESULT_LIMIT = 8
+
+// Primary geocoder: Photon (photon.komoot.io) - OpenStreetMap data, which is
+// much denser in Bangladesh than Mapbox's commercial POI set, and its public
+// instance is free with no API key. Mapbox stays as an automatic fallback so
+// search still works if the public Photon instance is down or slow.
+async function searchPhoton(text, proximity, signal) {
+    const params = new URLSearchParams({ q: text, limit: String(RESULT_LIMIT), lang: 'en' })
+    if (proximity) {
+        params.set('lat', String(proximity.lat))
+        params.set('lon', String(proximity.lng))
+    }
+    const res = await fetch(`https://photon.komoot.io/api/?${params}`, { signal })
+    if (!res.ok) throw new Error(`photon ${res.status}`)
+    const data = await res.json()
+
+    const results = []
+    const seen = new Set()
+    for (const feature of data.features || []) {
+        const props = feature.properties || {}
+        if (props.countrycode && props.countrycode !== 'BD') continue
+        const [lng, lat] = feature.geometry?.coordinates || []
+        if (lat == null || lng == null) continue
+
+        const label = [props.name, props.street, props.district, props.city, props.state]
+            .filter(Boolean)
+            .filter((part, i, arr) => arr.indexOf(part) === i)
+            .join(', ')
+        if (!label) continue
+
+        const key = props.osm_id ? `osm-${props.osm_type}-${props.osm_id}` : `${lat},${lng}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        results.push({ id: key, label, lat, lng })
+    }
+    return results
+}
+
+async function searchMapbox(text, proximity, signal) {
+    const params = new URLSearchParams({
+        access_token: MAPBOX_TOKEN,
+        autocomplete: 'true',
+        limit: '5',
+        country: 'bd',
+    })
+    if (proximity) {
+        params.set('proximity', `${proximity.lng},${proximity.lat}`)
+    }
+    const res = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${params}`,
+        { signal },
+    )
+    if (!res.ok) throw new Error(`mapbox ${res.status}`)
+    const data = await res.json()
+    return (data.features || []).map((feature) => ({
+        id: feature.id,
+        label: feature.place_name,
+        lat: feature.center[1],
+        lng: feature.center[0],
+    }))
+}
 
 const PlaceSearchInput = ({ placeholder, proximity, onPlaceSelect }) => {
     const [query, setQuery] = useState('')
@@ -25,16 +86,6 @@ const PlaceSearchInput = ({ placeholder, proximity, onPlaceSelect }) => {
                 return
             }
 
-            const params = new URLSearchParams({
-                access_token: MAPBOX_TOKEN,
-                autocomplete: 'true',
-                limit: '5',
-                country: 'bd',
-            })
-            if (proximity) {
-                params.set('proximity', `${proximity.lng},${proximity.lat}`)
-            }
-
             const requestId = ++requestIdRef.current
             setSearching(true)
             setSearchError(false)
@@ -42,14 +93,19 @@ const PlaceSearchInput = ({ placeholder, proximity, onPlaceSelect }) => {
             const controller = new AbortController()
             const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
 
-            fetch(
-                `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?${params}`,
-                { signal: controller.signal },
-            )
-                .then((res) => res.json())
-                .then((data) => {
+            searchPhoton(text, proximity, controller.signal)
+                .then((results) => {
+                    // Photon reachable but nothing found - give Mapbox a shot
+                    // rather than showing an empty dropdown.
+                    if (results.length === 0) {
+                        return searchMapbox(text, proximity, controller.signal)
+                    }
+                    return results
+                })
+                .catch(() => searchMapbox(text, proximity, controller.signal))
+                .then((results) => {
                     if (requestId !== requestIdRef.current) return
-                    setSuggestions(data.features || [])
+                    setSuggestions(results)
                     setOpen(true)
                     setSearching(false)
                 })
@@ -72,14 +128,14 @@ const PlaceSearchInput = ({ placeholder, proximity, onPlaceSelect }) => {
         debounceRef.current = setTimeout(() => search(value), 300)
     }
 
-    const handleSelect = (feature) => {
-        setQuery(feature.place_name)
+    const handleSelect = (place) => {
+        setQuery(place.label)
         setSuggestions([])
         setOpen(false)
         onPlaceSelect({
-            lat: feature.center[1],
-            lng: feature.center[0],
-            address: feature.place_name,
+            lat: place.lat,
+            lng: place.lng,
+            address: place.label,
         })
     }
 
@@ -139,13 +195,13 @@ const PlaceSearchInput = ({ placeholder, proximity, onPlaceSelect }) => {
                         )}
                         Use current location
                     </li>
-                    {suggestions.map((feature) => (
+                    {suggestions.map((place) => (
                         <li
-                            key={feature.id}
+                            key={place.id}
                             className="px-3 py-2 text-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
-                            onMouseDown={() => handleSelect(feature)}
+                            onMouseDown={() => handleSelect(place)}
                         >
-                            {feature.place_name}
+                            {place.label}
                         </li>
                     ))}
                 </ul>
