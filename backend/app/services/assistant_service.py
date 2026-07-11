@@ -12,13 +12,15 @@ from app.models.ride import LatLng
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+PHOTON_URL = "https://photon.komoot.io/api/"
 CATEGORY_SEARCH_URL = "https://api.mapbox.com/search/searchbox/v1/category/{category}"
 FORWARD_SEARCH_URL = "https://api.mapbox.com/search/searchbox/v1/forward"
 
-# Results are deliberately unrestricted by distance: proximity is passed to
-# Mapbox only as a ranking bias so nearer matches sort first, but a match
-# anywhere is still returned - the user picks from the list, so showing a
-# far-away result is strictly better than pretending it doesn't exist.
+# Results are deliberately unrestricted by distance WITHIN Bangladesh:
+# proximity is only a ranking bias so nearer matches sort first, but the
+# service only operates in BD, so anything outside the country is noise
+# and every lookup (Photon filter + Mapbox country param) enforces that.
+COUNTRY_CODE = "BD"
 RESULT_LIMIT = 10
 OVERPASS_RADIUS_METERS = 12000
 
@@ -178,6 +180,57 @@ async def _query_overpass(osm_key: str, osm_value: str, near: LatLng, limit: int
     return results
 
 
+async def _query_photon(search_query: str, near: LatLng, limit: int) -> list[PlaceResult] | None:
+    """Named-place search on OpenStreetMap data via the free Photon geocoder,
+    same source the booking screen's search box uses. Returns None on any
+    failure (signal to fall back to Mapbox), [] on a genuine empty result."""
+    params = {
+        "q": search_query,
+        "limit": limit,
+        "lang": "en",
+        "lat": near.lat,
+        "lon": near.lng,
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0, headers={"User-Agent": "RideShareApp/1.0 (portfolio project)"}
+        ) as client:
+            response = await client.get(PHOTON_URL, params=params)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+
+    results = []
+    for feature in response.json().get("features", []):
+        props = feature.get("properties", {})
+        # Strict equality: a result missing countrycode entirely must not
+        # slip through as if it were inside Bangladesh.
+        if (props.get("countrycode") or "").upper() != COUNTRY_CODE:
+            continue
+        coords = feature.get("geometry", {}).get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        lng, lat = coords[0], coords[1]
+        name = props.get("name")
+        if not name:
+            continue
+        address_parts = [props.get("street"), props.get("district"), props.get("city"), props.get("state")]
+        address = ", ".join(dict.fromkeys(p for p in address_parts if p)) or None
+        results.append(
+            PlaceResult(
+                name=name,
+                address=address,
+                lat=lat,
+                lng=lng,
+                distance_km=round(_haversine_km(near, {"lat": lat, "lng": lng}), 1),
+            )
+        )
+
+    results.sort(key=lambda p: p.distance_km)
+    return results
+
+
 async def _query_mapbox(search_query: str, near: LatLng, limit: int, *, is_category: bool) -> list[PlaceResult]:
     settings = get_settings()
     if not settings.mapbox_token:
@@ -192,6 +245,7 @@ async def _query_mapbox(search_query: str, near: LatLng, limit: int, *, is_categ
         "access_token": settings.mapbox_token,
         "proximity": f"{near.lng},{near.lat}",
         "limit": limit,
+        "country": COUNTRY_CODE,
     }
     if not is_category:
         params["q"] = search_query
@@ -231,8 +285,14 @@ async def resolve_places(search_query: str, near: LatLng, limit: int = RESULT_LI
         if results:
             return results
         # Overpass unreachable OR nothing within its local radius - fall back
-        # to Mapbox's category search, which has no distance restriction, so
-        # the user always gets whatever exists rather than an empty answer.
+        # to Mapbox's category search (country-restricted to BD), so the user
+        # always gets whatever exists rather than an empty answer.
         return await _query_mapbox(key, near, limit, is_category=True)
 
+    # Named places: OSM (Photon) first - denser Bangladesh coverage and the
+    # same source as the booking screen's search box - then Mapbox (also
+    # country-restricted) when Photon is down or finds nothing in BD.
+    results = await _query_photon(search_query, near, limit)
+    if results:
+        return results
     return await _query_mapbox(search_query, near, limit, is_category=False)
