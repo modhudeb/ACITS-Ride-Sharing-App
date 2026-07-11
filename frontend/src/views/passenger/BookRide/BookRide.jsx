@@ -285,6 +285,23 @@ const BookRide = () => {
         setScheduledAt('')
     }
 
+    // Same as handleStartOver but keeps the destination the passenger already
+    // searched for - a cancelled ride shouldn't force them to re-search from
+    // scratch. The estimate effect below picks this up automatically once
+    // rideId clears (pickup/destination are still set, so it refetches a
+    // fresh fare rather than showing a stale one).
+    const handleSearchAgain = () => {
+        setRideId(null)
+        setEstimate(null)
+        setPickingDestinationOnMap(false)
+        setHasCenteredOnRide(false)
+        setHasGoods(false)
+        setGoodsWeight('')
+        setGoodsVolume('')
+        setScheduleLater(false)
+        setScheduledAt('')
+    }
+
     const displayPickup = ride ? ride.pickup : pickup
     const displayDestination = ride ? ride.destination : destination
     const displayRoutePath = ride ? ride.route_path : estimate?.route_path
@@ -915,7 +932,7 @@ const BookRide = () => {
                                 the way.
                             </p>
                         )}
-                        <Button block variant="solid" onClick={handleStartOver}>
+                        <Button block variant="solid" onClick={handleSearchAgain}>
                             Search again
                         </Button>
                     </Card>
